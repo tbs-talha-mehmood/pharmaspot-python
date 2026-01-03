@@ -49,10 +49,9 @@ class ProductCreate(BaseModel):
     barcode: Optional[int] = None
     expirationDate: Optional[str] = ""
     price: Optional[float] = 0.0
-    category: Optional[str] = ""
+    company_id: Optional[int] = 0
     quantity: Optional[int] = 0
     name: str
-    stock: Optional[int] = 1
     minStock: Optional[int] = 0
     img: Optional[str] = ""
     purchase_discount: Optional[float] = 0.0
@@ -64,10 +63,10 @@ class ProductOut(BaseModel):
     barcode: Optional[int]
     expirationDate: str
     price: float
-    category: str
+    company_id: int
+    company_name: str
     quantity: int
     name: str
-    stock: int
     minStock: int
     img: str
     purchase_discount: float

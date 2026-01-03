@@ -33,8 +33,23 @@ class ApiClient:
         return self.post_json("/api/users/post", payload).json()
 
     # Products (JSON CRUD)
-    def products(self):
-        return self.get("/api/products/all").json()
+    def products(self, company_id: int = 0, q: str = ""):
+        params = []
+        if company_id:
+            params.append(f"company_id={int(company_id)}")
+        if q:
+            params.append(f"q={q}")
+        suffix = f"?{'&'.join(params)}" if params else ""
+        return self.get(f"/api/products/all{suffix}").json()
+
+    def products_page(self, company_id: int = 0, q: str = "", page: int = 1, page_size: int = 25):
+        params = [f"page={int(page)}", f"page_size={int(page_size)}"]
+        if company_id:
+            params.append(f"company_id={int(company_id)}")
+        if q:
+            params.append(f"q={q}")
+        suffix = f"?{'&'.join(params)}"
+        return self.get(f"/api/products/page{suffix}").json()
 
     def product_get(self, pid: int):
         return self.get(f"/api/products/product/{pid}").json()

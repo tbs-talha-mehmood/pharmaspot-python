@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, Text
+from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, Text, ForeignKey
 try:
     from sqlalchemy.dialects.mysql import LONGTEXT as MYSQL_LONGTEXT  # type: ignore
 except Exception:  # pragma: no cover - dialect not present
@@ -29,10 +29,9 @@ class Product(Base):
     barcode = Column(Integer, index=True, nullable=True)
     expirationDate = Column(String(32), default="")
     price = Column(Float, default=0.0)
-    category = Column(String(191), default="")
+    company_id = Column(Integer, ForeignKey("companies.id"), default=0)
     quantity = Column(Integer, default=0)
     name = Column(String(255), nullable=False)
-    stock = Column(Integer, default=1)
     minStock = Column(Integer, default=0)
     img = Column(String(255), default="")
     purchase_discount = Column(Float, default=0.0)

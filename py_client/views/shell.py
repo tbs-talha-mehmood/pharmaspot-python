@@ -64,6 +64,12 @@ class ShellView(QtWidgets.QWidget):
         index = current.data(QtCore.Qt.UserRole)
         if isinstance(index, int):
             self.stack.setCurrentIndex(index)
+            widget = self.stack.widget(index)
+            if hasattr(widget, "refresh"):
+                try:
+                    widget.refresh()
+                except Exception:
+                    pass
 
     def set_user(self, user: dict):
         self.user = user
