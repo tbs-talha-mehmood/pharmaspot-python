@@ -11,6 +11,7 @@ class CompaniesView(QtWidgets.QWidget):
     def _build(self):
         layout = QtWidgets.QVBoxLayout(self)
         header = QtWidgets.QHBoxLayout()
+        self.chk_inactive = QtWidgets.QCheckBox("Show inactive")
         header.addWidget(QtWidgets.QLabel("Companies"))
         self.btn_refresh = QtWidgets.QPushButton("Refresh")
         self.btn_add = QtWidgets.QPushButton("Add Company")
@@ -21,6 +22,7 @@ class CompaniesView(QtWidgets.QWidget):
         header.addWidget(self.btn_edit)
         header.addWidget(self.btn_delete)
         header.addStretch(1)
+        header.addWidget(self.chk_inactive)
         layout.addLayout(header)
 
         self.table = QtWidgets.QTableWidget(0, 2)
@@ -32,10 +34,11 @@ class CompaniesView(QtWidgets.QWidget):
         self.btn_add.clicked.connect(self.add_dialog)
         self.btn_edit.clicked.connect(self.edit_selected)
         self.btn_delete.clicked.connect(self.delete_selected)
+        self.chk_inactive.stateChanged.connect(self.refresh)
 
     def refresh(self):
         try:
-            items = self.api.companies()
+            items = self.api.companies(include_inactive=self.chk_inactive.isChecked())
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Error", str(e))
             return

@@ -64,6 +64,7 @@ class Company(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(191), unique=True, nullable=False)
+    is_active = Column(Boolean, default=True)
 
 
 class Purchase(Base):

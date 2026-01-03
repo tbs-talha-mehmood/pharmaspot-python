@@ -69,8 +69,9 @@ class ApiClient:
         return self.post_json("/api/settings/set", {"key": key, "value": value}).json()
 
     # Companies
-    def companies(self):
-        return self.get("/api/companies/all").json()
+    def companies(self, include_inactive: bool = False):
+        suffix = "?include_inactive=true" if include_inactive else ""
+        return self.get(f"/api/companies/all{suffix}").json()
 
     def company_upsert(self, payload: dict):
         r = self.post_json("/api/companies/company", payload)

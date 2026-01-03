@@ -20,8 +20,11 @@ def index():
 
 
 @router.get("/all", response_model=List[CompanyOut])
-def list_companies(db: Session = Depends(get_db)):
-    return db.query(Company).all()
+def list_companies(include_inactive: bool = False, db: Session = Depends(get_db)):
+    q = db.query(Company)
+    if not include_inactive:
+        q = q.filter(Company.is_active == True)  # noqa: E712
+    return q.all()
 
 
 @router.post("/company", response_model=CompanyOut)
@@ -37,6 +40,8 @@ def upsert_company(c: CompanyCreate, db: Session = Depends(get_db)):
             if conflict:
                 raise HTTPException(status_code=400, detail="Company name already exists")
             existing.name = name
+            if existing.is_active is None:
+                existing.is_active = True
             db.add(existing)
             try:
                 db.commit()
@@ -49,7 +54,7 @@ def upsert_company(c: CompanyCreate, db: Session = Depends(get_db)):
             conflict = db.query(Company).filter(func.lower(Company.name) == name_l).first()
             if conflict:
                 raise HTTPException(status_code=400, detail="Company name already exists")
-            newc = Company(id=int(c.id), name=name)
+            newc = Company(id=int(c.id), name=name, is_active=True)
             db.add(newc)
             try:
                 db.commit()
@@ -62,7 +67,7 @@ def upsert_company(c: CompanyCreate, db: Session = Depends(get_db)):
         conflict = db.query(Company).filter(func.lower(Company.name) == name_l).first()
         if conflict:
             raise HTTPException(status_code=400, detail="Company name already exists")
-        newc = Company(name=name)
+        newc = Company(name=name, is_active=True)
         db.add(newc)
         try:
             db.commit()
@@ -78,6 +83,7 @@ def delete_company(company_id: int, db: Session = Depends(get_db)):
     obj = db.query(Company).filter(Company.id == company_id).first()
     if not obj:
         raise HTTPException(status_code=404, detail="Company not found")
-    db.delete(obj)
+    obj.is_active = False
+    db.add(obj)
     db.commit()
-    return {"ok": True}
+    return {"ok": True, "inactive": True}
