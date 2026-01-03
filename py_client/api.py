@@ -61,8 +61,16 @@ class ApiClient:
         return requests.delete(self.base_url + f"/api/products/product/{pid}").json()
 
     # Customers
-    def customers(self):
-        return self.get("/api/customers/all").json()
+    def customers(self, include_inactive: bool = False):
+        suffix = "?include_inactive=true" if include_inactive else ""
+        return self.get(f"/api/customers/all{suffix}").json()
+
+    def customers_page(self, include_inactive: bool = False, page: int = 1, page_size: int = 25):
+        params = [f"page={int(page)}", f"page_size={int(page_size)}"]
+        if include_inactive:
+            params.append("include_inactive=true")
+        suffix = f"?{'&'.join(params)}"
+        return self.get(f"/api/customers/page{suffix}").json()
 
     def customer_get(self, cid: int):
         return self.get(f"/api/customers/customer/{cid}").json()

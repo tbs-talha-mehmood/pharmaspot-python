@@ -91,6 +91,7 @@ class CustomerOut(BaseModel):
     phone: str
     email: str
     address: str
+    is_active: bool
 
     class Config:
         from_attributes = True

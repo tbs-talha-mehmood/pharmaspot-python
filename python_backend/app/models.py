@@ -49,6 +49,7 @@ class Customer(Base):
     phone = Column(String(64), default="")
     email = Column(String(255), default="")
     address = Column(String(255), default="")
+    is_active = Column(Boolean, default=True)
 
 
 class Setting(Base):
