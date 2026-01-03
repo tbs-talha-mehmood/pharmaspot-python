@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+sqlalchemy
+pydantic
+# Pin versions to ensure compatibility with passlib's bcrypt backend
+passlib==1.7.4
+bcrypt==3.2.2
+python-multipart
+pymysql
