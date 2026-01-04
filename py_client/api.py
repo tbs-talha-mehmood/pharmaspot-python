@@ -113,6 +113,9 @@ class ApiClient:
     def purchase_new(self, payload: dict):
         return self.post_json("/api/purchases/new", payload).json()
 
+    def purchase_update(self, purchase_id: int, payload: dict):
+        return requests.put(self.base_url + f"/api/purchases/purchase/{purchase_id}", json=payload).json()
+
     # Transactions
     def transactions_list(self):
         return self.get("/api/transactions/list").json()

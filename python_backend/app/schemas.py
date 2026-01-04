@@ -50,7 +50,7 @@ class ProductCreate(BaseModel):
     expirationDate: Optional[str] = ""
     price: Optional[float] = 0.0
     company_id: Optional[int] = 0
-    quantity: Optional[int] = 0
+    quantity: Optional[int] = None
     name: str
     minStock: Optional[int] = 0
     img: Optional[str] = ""
@@ -128,8 +128,14 @@ class CompanyOut(BaseModel):
 
 class PurchaseItem(BaseModel):
     product_id: int
+    company_id: Optional[int] = None
     quantity: int
     price: float
+    retail_price: Optional[float] = None
+    discount_pct: Optional[float] = None
+    extra_discount_pct: Optional[float] = None
+    trade_price: Optional[float] = None
+    is_cut_rate: Optional[bool] = None
 
 
 class PurchaseCreate(BaseModel):

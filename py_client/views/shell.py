@@ -37,6 +37,11 @@ class ShellView(QtWidgets.QWidget):
         self.transactions = TransactionsView(self.api)
         self.reports = ReportsView(self.api)
 
+        try:
+            self.purchases.inventory_changed.connect(self.products.refresh_inventory)
+        except Exception:
+            pass
+
         items = [
             ("Point of Sale", self.pos),
             ("Products", self.products),

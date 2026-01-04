@@ -111,7 +111,10 @@ def upsert_product(payload: ProductCreate, db: Session = Depends(get_db)):
     prod.price = payload.price or 0.0
     prod.company_id = company_id
     prod.company_id = company_id
-    prod.quantity = payload.quantity or 0
+    if payload.quantity is not None:
+        prod.quantity = payload.quantity
+    elif prod.quantity is None:
+        prod.quantity = 0
     prod.name = payload.name
     prod.minStock = payload.minStock or 0
     prod.img = payload.img or ""

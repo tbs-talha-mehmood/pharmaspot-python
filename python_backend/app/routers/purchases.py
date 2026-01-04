@@ -24,7 +24,19 @@ def _to_dict(p: Purchase) -> PurchaseOut:
     try:
         raw = json.loads(p.items_json or "[]")
         for it in raw:
-            items.append(PurchaseItem(product_id=int(it.get("product_id")), quantity=int(it.get("quantity", 0)), price=float(it.get("price", 0.0))))
+            items.append(
+                PurchaseItem(
+                    product_id=int(it.get("product_id")),
+                    company_id=int(it.get("company_id")) if it.get("company_id") is not None else None,
+                    quantity=int(it.get("quantity", 0)),
+                    price=float(it.get("price", 0.0)),
+                    retail_price=float(it.get("retail_price", 0.0)) if it.get("retail_price") is not None else None,
+                    discount_pct=float(it.get("discount_pct", 0.0)) if it.get("discount_pct") is not None else None,
+                    extra_discount_pct=float(it.get("extra_discount_pct", 0.0)) if it.get("extra_discount_pct") is not None else None,
+                    trade_price=float(it.get("trade_price", 0.0)) if it.get("trade_price") is not None else None,
+                    is_cut_rate=bool(it.get("is_cut_rate")) if it.get("is_cut_rate") is not None else None,
+                )
+            )
     except Exception:
         pass
     return PurchaseOut(
@@ -53,7 +65,6 @@ def create_purchase(payload: PurchaseCreate, db: Session = Depends(get_db)):
         prod = db.query(Product).filter(Product.id == item.product_id).first()
         if prod:
             prod.quantity = int(prod.quantity or 0) + int(item.quantity or 0)
-            # Update last cost from purchase price
             try:
                 prod.cost = float(item.price or 0.0)
             except Exception:
