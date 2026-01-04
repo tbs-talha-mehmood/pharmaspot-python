@@ -20,6 +20,8 @@ def index():
 
 
 def _to_out(prod: Product, company_map: dict[int, str]) -> ProductOut:
+    discount_val = float(getattr(prod, "discount_pct", 0.0) or 0.0)
+    trade_val = float(getattr(prod, "trade_price", 0.0) or 0.0)
     return ProductOut(
         id=prod.id,
         barcode=prod.barcode,
@@ -29,10 +31,12 @@ def _to_out(prod: Product, company_map: dict[int, str]) -> ProductOut:
         company_name=company_map.get(int(prod.company_id or 0), ""),
         quantity=int(prod.quantity or 0),
         name=prod.name,
-        minStock=int(prod.minStock or 0),
+        minStock=0,
         img=prod.img or "",
-        purchase_discount=float(prod.purchase_discount or 0.0),
-        sale_discount=float(prod.sale_discount or 0.0),
+        discount_pct=discount_val,
+        trade_price=trade_val,
+        purchase_discount=discount_val,
+        sale_discount=0.0,
     )
 
 
@@ -116,10 +120,26 @@ def upsert_product(payload: ProductCreate, db: Session = Depends(get_db)):
     elif prod.quantity is None:
         prod.quantity = 0
     prod.name = payload.name
-    prod.minStock = payload.minStock or 0
     prod.img = payload.img or ""
-    prod.purchase_discount = payload.purchase_discount or 0.0
-    prod.sale_discount = payload.sale_discount or 0.0
+    # Map legacy fields to new ones if present
+    try:
+        discount_val = (
+            payload.discount_pct
+            if payload.discount_pct is not None
+            else payload.purchase_discount
+        )
+        if discount_val is not None:
+            prod.discount_pct = float(discount_val or 0.0)
+    except Exception:
+        pass
+    try:
+        trade_val = payload.trade_price
+        if trade_val is not None:
+            prod.trade_price = float(trade_val or 0.0)
+            prod.cost = float(trade_val or 0.0)
+    except Exception:
+        pass
+    # sale_discount removed (ignored)
 
     db.commit()
     db.refresh(prod)

@@ -49,6 +49,34 @@ def _to_dict(p: Purchase) -> PurchaseOut:
     )
 
 
+def _apply_purchase_item(prod: Product, item: PurchaseItem) -> None:
+    """Increment stock and sync discount/trade metadata on a product."""
+    if prod.quantity is None:
+        prod.quantity = 0
+    prod.quantity = int(prod.quantity) + int(item.quantity or 0)
+    # Derive discount if missing using retail/trade when available
+    discount_val = item.discount_pct
+    if discount_val is None:
+        try:
+            retail_val = float(item.retail_price or 0.0)
+            trade_val = float(item.trade_price if item.trade_price is not None else item.price or 0.0)
+            if retail_val > 0:
+                discount_val = max(0.0, (1.0 - (trade_val / retail_val)) * 100.0)
+        except Exception:
+            discount_val = None
+    if discount_val is not None:
+        try:
+            prod.discount_pct = float(discount_val or 0.0)
+        except Exception:
+            pass
+    try:
+        trade_price = item.trade_price if item.trade_price is not None else item.price
+        trade_val = float(trade_price or 0.0)
+        prod.trade_price = trade_val
+    except Exception:
+        pass
+
+
 @router.post("/new", response_model=PurchaseOut)
 def create_purchase(payload: PurchaseCreate, db: Session = Depends(get_db)):
     now = payload.date or datetime.utcnow().isoformat()
@@ -60,15 +88,11 @@ def create_purchase(payload: PurchaseCreate, db: Session = Depends(get_db)):
         items_json=json.dumps([i.model_dump() for i in payload.items]),
     )
     db.add(obj)
-    # Increment stock
+    # Increment stock and update product pricing metadata
     for item in payload.items:
         prod = db.query(Product).filter(Product.id == item.product_id).first()
         if prod:
-            prod.quantity = int(prod.quantity or 0) + int(item.quantity or 0)
-            try:
-                prod.cost = float(item.price or 0.0)
-            except Exception:
-                pass
+            _apply_purchase_item(prod, item)
             db.add(prod)
     db.commit()
     db.refresh(obj)
@@ -108,15 +132,11 @@ def update_purchase(purchase_id: int, payload: PurchaseCreate, db: Session = Dep
         except Exception:
             pass
 
-    # Apply new stock increments
+    # Apply new stock increments and update product pricing metadata
     for item in payload.items:
         prod = db.query(Product).filter(Product.id == item.product_id).first()
         if prod:
-            prod.quantity = int(prod.quantity or 0) + int(item.quantity or 0)
-            try:
-                prod.cost = float(item.price or 0.0)
-            except Exception:
-                pass
+            _apply_purchase_item(prod, item)
             db.add(prod)
 
     # Update purchase row

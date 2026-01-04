@@ -32,13 +32,11 @@ class Product(Base):
     company_id = Column(Integer, ForeignKey("companies.id"), default=0)
     quantity = Column(Integer, default=0)
     name = Column(String(255), nullable=False)
-    minStock = Column(Integer, default=0)
     img = Column(String(255), default="")
-    purchase_discount = Column(Float, default=0.0)
-    sale_discount = Column(Float, default=0.0)
+    # New canonical purchase fields
+    discount_pct = Column(Float, default=0.0)   # last purchase discount percent
+    trade_price = Column(Float, default=0.0)    # last purchase trade price (unit)
     created_at = Column(DateTime, server_default=func.now())
-    # optional unit cost for profit calculations (maintained by purchases)
-    cost = Column(Float, default=0.0)
 
 
 class Customer(Base):
@@ -95,3 +93,11 @@ class Transaction(Base):
     items_json = Column(MYSQL_LONGTEXT if MYSQL_LONGTEXT is not None else Text, default="[]")
     profit = Column(Float, default=0.0)
     inventory_deducted = Column(Boolean, default=False)
+
+
+# Track per-purchase discount and trade price entries per product
+"""
+Note: Columns minStock, purchase_discount, and sale_discount were removed
+in favor of discount_pct and trade_price on products.
+Run the alter script in python_backend/tools to migrate an existing DB.
+"""

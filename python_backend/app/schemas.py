@@ -54,6 +54,9 @@ class ProductCreate(BaseModel):
     name: str
     minStock: Optional[int] = 0
     img: Optional[str] = ""
+    # New canonical purchase metadata (kept optional for backward compatibility)
+    discount_pct: Optional[float] = None
+    trade_price: Optional[float] = None
     purchase_discount: Optional[float] = 0.0
     sale_discount: Optional[float] = 0.0
 
@@ -69,6 +72,8 @@ class ProductOut(BaseModel):
     name: str
     minStock: int
     img: str
+    discount_pct: float
+    trade_price: float
     purchase_discount: float
     sale_discount: float
 

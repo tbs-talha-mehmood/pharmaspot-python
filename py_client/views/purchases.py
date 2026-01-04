@@ -1,4 +1,4 @@
-from PyQt5 import QtWidgets, QtCore
+from PyQt5 import QtWidgets, QtCore, QtGui
 
 
 class PurchasesView(QtWidgets.QWidget):
@@ -44,6 +44,8 @@ class PurchasesView(QtWidgets.QWidget):
         self.items_table.horizontalHeader().setStretchLastSection(True)
         v.addWidget(self.items_table)
         self._suppress_item_change = False
+        # Enable keyboard navigation within the items table
+        self.items_table.installEventFilter(self)
 
         btns_bar = QtWidgets.QHBoxLayout()
         self.btn_add = QtWidgets.QPushButton("Add Item")
@@ -76,6 +78,9 @@ class PurchasesView(QtWidgets.QWidget):
         self.btn_save.clicked.connect(self._save_purchase)
         self.btn_cancel_edit.clicked.connect(self._cancel_edit)
         self.items_table.itemChanged.connect(self._on_item_changed)
+        # Keyboard shortcuts similar to POS
+        QtWidgets.QShortcut(QtGui.QKeySequence("F2"), self, activated=self._add_item_dialog)
+        QtWidgets.QShortcut(QtGui.QKeySequence(QtCore.Qt.Key_Delete), self, activated=self._remove_item)
 
     def _build_history(self, parent):
         v = QtWidgets.QVBoxLayout(parent)
@@ -256,6 +261,7 @@ class PurchasesView(QtWidgets.QWidget):
         self._apply_cut_state(r)
         self._recalc_row(r)
         self._recalc_total()
+        self._focus_items_cell(r, 2)
 
     def _on_widget_changed(self, widget):
         row = self._find_row_for_widget(widget)
@@ -299,6 +305,17 @@ class PurchasesView(QtWidgets.QWidget):
             except Exception:
                 pass
         self.total_label.setText(f"Total: {total:.2f}")
+
+    def _focus_items_cell(self, row: int, col: int):
+        self.items_table.setCurrentCell(row, col)
+        w = self.items_table.cellWidget(row, col)
+        if w:
+            w.setFocus()
+            if hasattr(w, "lineEdit") and w.lineEdit():
+                try:
+                    w.lineEdit().selectAll()
+                except Exception:
+                    pass
 
     def _remove_item(self):
         r = self.items_table.currentRow()
@@ -503,3 +520,46 @@ class PurchasesView(QtWidgets.QWidget):
             return
         self._clear_items()
         self._exit_edit_mode()
+
+    # ---------- Keyboard navigation ----------
+    def eventFilter(self, obj, event):
+        if obj is self.items_table and event.type() == QtCore.QEvent.KeyPress:
+            if event.key() in (QtCore.Qt.Key_Return, QtCore.Qt.Key_Enter):
+                self._focus_next_item_field()
+                return True
+            if event.key() == QtCore.Qt.Key_Delete:
+                self._remove_item()
+                return True
+        return super().eventFilter(obj, event)
+
+    def _focus_next_item_field(self):
+        if self.items_table.rowCount() == 0:
+            return
+        editable_cols = [2, 4, 5]  # discount, addl %, qty
+        row = self.items_table.currentRow()
+        if row < 0:
+            row = 0
+        col = self.items_table.currentColumn()
+        focus_w = self.focusWidget()
+        # If cut rate, allow trade price edit
+        try:
+            cut = bool(self.items_table.cellWidget(row, 7).isChecked())
+        except Exception:
+            cut = False
+        if cut:
+            editable_cols = [2, 3, 4, 5]
+        for c in editable_cols:
+            if self.items_table.cellWidget(row, c) is focus_w:
+                col = c
+                break
+        try:
+            idx = editable_cols.index(col)
+        except ValueError:
+            idx = -1
+        if idx + 1 < len(editable_cols):
+            next_row, next_col = row, editable_cols[idx + 1]
+        else:
+            next_row, next_col = row + 1, editable_cols[0]
+        if next_row >= self.items_table.rowCount():
+            next_row = row
+        self._focus_items_cell(next_row, next_col)
