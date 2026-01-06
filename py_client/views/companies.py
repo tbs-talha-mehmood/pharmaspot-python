@@ -12,7 +12,9 @@ class CompaniesView(QtWidgets.QWidget):
         layout = QtWidgets.QVBoxLayout(self)
         header = QtWidgets.QHBoxLayout()
         self.chk_inactive = QtWidgets.QCheckBox("Show inactive")
-        header.addWidget(QtWidgets.QLabel("Companies"))
+        title = QtWidgets.QLabel("Companies")
+        title.setObjectName("title")
+        header.addWidget(title)
         self.btn_refresh = QtWidgets.QPushButton("Refresh")
         self.btn_add = QtWidgets.QPushButton("Add Company")
         self.btn_edit = QtWidgets.QPushButton("Edit")
@@ -28,6 +30,7 @@ class CompaniesView(QtWidgets.QWidget):
         self.table = QtWidgets.QTableWidget(0, 2)
         self.table.setHorizontalHeaderLabels(["ID", "Name"])
         self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setAlternatingRowColors(True)
         layout.addWidget(self.table)
 
         self.btn_refresh.clicked.connect(self.refresh)

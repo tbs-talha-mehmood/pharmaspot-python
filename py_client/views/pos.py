@@ -33,7 +33,7 @@ class POSView(QtWidgets.QWidget):
         # Top: header + customer + global discount
         top = QtWidgets.QHBoxLayout()
         title = QtWidgets.QLabel("Point of Sale")
-        title.setStyleSheet("font-size: 16px; font-weight: 600;")
+        title.setObjectName("title")
         top.addWidget(title)
         top.addStretch(1)
         top.addWidget(QtWidgets.QLabel("Customer:"))
@@ -83,6 +83,7 @@ class POSView(QtWidgets.QWidget):
             self.table.horizontalHeader().setSectionResizeMode(col, QtWidgets.QHeaderView.ResizeToContents)
         self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self.table.setAlternatingRowColors(True)
         root.addWidget(self.table, 1)
 
         # Bottom: totals + actions
@@ -128,7 +129,9 @@ class POSView(QtWidgets.QWidget):
     # ---------- Data loads ----------
     def _load_products_cache(self):
         try:
-            self.products_cache = self.api.products() or []
+            def _fetch():
+                return self.api.products() or []
+            self.products_cache = self._with_loader("Loading products...", _fetch) or []
         except Exception as e:
             self.products_cache = []
             QtWidgets.QMessageBox.warning(self, "Products", str(e))
@@ -278,7 +281,7 @@ class POSView(QtWidgets.QWidget):
             return
         pid, name = sel
         try:
-            docs = self.api.purchases_list() or []
+            docs = self._with_loader("Loading purchase history...", self.api.purchases_list) or []
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Error", str(e))
             return
@@ -344,6 +347,7 @@ class POSView(QtWidgets.QWidget):
             ["Date", "Supplier", "Qty", "Retail", "Trade", "%Disc", "Addl %", "Line Total", "Cut"]
         )
         table.horizontalHeader().setStretchLastSection(True)
+        table.setAlternatingRowColors(True)
         for r_idx, row in enumerate(rows):
             table.setItem(r_idx, 0, QtWidgets.QTableWidgetItem(str(row["date"])))
             table.setItem(r_idx, 1, QtWidgets.QTableWidgetItem(str(row["supplier"])))
@@ -720,6 +724,20 @@ class POSView(QtWidgets.QWidget):
         snap = self.held_sales.pop(idx)
         self._load_cart_from_snapshot(snap)
 
+    def _with_loader(self, message: str, fn, *args, **kwargs):
+        dlg = QtWidgets.QProgressDialog(message, None, 0, 0, self)
+        dlg.setWindowTitle("Please wait")
+        dlg.setCancelButton(None)
+        dlg.setWindowModality(QtCore.Qt.ApplicationModal)
+        dlg.setMinimumDuration(0)
+        dlg.show()
+        QtWidgets.QApplication.processEvents()
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            dlg.close()
+            QtWidgets.QApplication.processEvents()
+
     def _recalc_totals(self):
         # Subtotal
         subtotal = 0.0
@@ -784,7 +802,7 @@ class POSView(QtWidgets.QWidget):
                 "discount": discount_pct,
                 "items": items,
             }
-            self.api.transaction_new(payload)
+            self._with_loader("Completing checkout...", lambda: self.api.transaction_new(payload))
             self._print_receipt(items, subtotal, discount_pct, vat_amount, self.vat_percent, grand)
             QtWidgets.QMessageBox.information(self, "Success", "Checkout complete")
             self._load_products_cache()

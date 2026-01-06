@@ -11,7 +11,9 @@ class CustomersView(QtWidgets.QWidget):
     def _build(self):
         layout = QtWidgets.QVBoxLayout(self)
         header = QtWidgets.QHBoxLayout()
-        header.addWidget(QtWidgets.QLabel("Customers"))
+        title = QtWidgets.QLabel("Customers")
+        title.setObjectName("title")
+        header.addWidget(title)
         self.chk_inactive = QtWidgets.QCheckBox("Show inactive")
         self.btn_refresh = QtWidgets.QPushButton("Refresh")
         self.btn_add = QtWidgets.QPushButton("Add Customer")
@@ -28,6 +30,7 @@ class CustomersView(QtWidgets.QWidget):
         self.table = QtWidgets.QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(["ID", "Name", "Phone", "Email", "Address"])
         self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setAlternatingRowColors(True)
         layout.addWidget(self.table)
 
         pager = QtWidgets.QHBoxLayout()

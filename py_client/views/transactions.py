@@ -12,7 +12,9 @@ class TransactionsView(QtWidgets.QWidget):
     def _build(self):
         layout = QtWidgets.QVBoxLayout(self)
         header = QtWidgets.QHBoxLayout()
-        header.addWidget(QtWidgets.QLabel("Transactions"))
+        title = QtWidgets.QLabel("Transactions")
+        title.setObjectName("title")
+        header.addWidget(title)
         header.addWidget(QtWidgets.QLabel("Date From"))
         self.start = QtWidgets.QDateEdit(); self.start.setCalendarPopup(True)
         self.start.setDate(QtCore.QDate.currentDate().addDays(-29))
@@ -34,6 +36,7 @@ class TransactionsView(QtWidgets.QWidget):
         self.table = QtWidgets.QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(["Date", "User", "Customer", "Total", "Paid", "Discount"])
         self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setAlternatingRowColors(True)
         layout.addWidget(self.table)
 
         self.btn_refresh.clicked.connect(self.refresh)

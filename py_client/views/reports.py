@@ -11,7 +11,7 @@ class ReportsView(QtWidgets.QWidget):
     def _build(self):
         layout = QtWidgets.QVBoxLayout(self)
         title = QtWidgets.QLabel("Reports")
-        title.setStyleSheet("font-size:16px;font-weight:bold")
+        title.setObjectName("title")
         layout.addWidget(title)
 
         row = QtWidgets.QHBoxLayout()

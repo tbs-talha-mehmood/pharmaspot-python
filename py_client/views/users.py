@@ -11,7 +11,9 @@ class UsersView(QtWidgets.QWidget):
     def _build(self):
         layout = QtWidgets.QVBoxLayout(self)
         header = QtWidgets.QHBoxLayout()
-        header.addWidget(QtWidgets.QLabel("Users"))
+        title = QtWidgets.QLabel("Users")
+        title.setObjectName("title")
+        header.addWidget(title)
         self.btn_refresh = QtWidgets.QPushButton("Refresh")
         self.btn_add = QtWidgets.QPushButton("Add User")
         header.addWidget(self.btn_refresh)
@@ -22,6 +24,7 @@ class UsersView(QtWidgets.QWidget):
         self.table = QtWidgets.QTableWidget(0, 3)
         self.table.setHorizontalHeaderLabels(["ID", "Username", "Fullname"])
         self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setAlternatingRowColors(True)
         layout.addWidget(self.table)
 
         self.btn_refresh.clicked.connect(self.refresh)

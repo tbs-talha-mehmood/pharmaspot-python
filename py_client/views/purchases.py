@@ -37,21 +37,39 @@ class PurchasesView(QtWidgets.QWidget):
         hint = QtWidgets.QLabel("Trade = Retail minus % Discount; Addl % applies to Trade.")
         v.addWidget(hint)
 
+        # Inline search (POS-style)
+        search_row = QtWidgets.QHBoxLayout()
+        self.search = QtWidgets.QLineEdit()
+        self.search.setPlaceholderText("Search product by name")
+        self.search.textChanged.connect(self._on_search_changed)
+        self.search.returnPressed.connect(self._add_first_search_result)
+        self.search.installEventFilter(self)
+        search_row.addWidget(self.search, 1)
+        self.refresh_btn = QtWidgets.QPushButton("Refresh")
+        self.refresh_btn.clicked.connect(lambda: self._load_products(force=True))
+        search_row.addWidget(self.refresh_btn)
+        v.addLayout(search_row)
+
+        self.results = QtWidgets.QListWidget()
+        self.results.setVisible(False)
+        self.results.setMaximumHeight(160)
+        self.results.itemActivated.connect(self._on_result_activate)
+        v.addWidget(self.results)
+
         self.items_table = QtWidgets.QTableWidget(0, 8)
         self.items_table.setHorizontalHeaderLabels(
             ["Product", "Retail", "% Discount", "Trade", "Addl %", "Qty", "Line Total", "Cut"]
         )
         self.items_table.horizontalHeader().setStretchLastSection(True)
+        self.items_table.setAlternatingRowColors(True)
         v.addWidget(self.items_table)
         self._suppress_item_change = False
         # Enable keyboard navigation within the items table
         self.items_table.installEventFilter(self)
 
         btns_bar = QtWidgets.QHBoxLayout()
-        self.btn_add = QtWidgets.QPushButton("Add Item")
         self.btn_remove = QtWidgets.QPushButton("Remove Item")
         self.btn_clear = QtWidgets.QPushButton("Clear")
-        btns_bar.addWidget(self.btn_add)
         btns_bar.addWidget(self.btn_remove)
         btns_bar.addWidget(self.btn_clear)
         btns_bar.addStretch(1)
@@ -72,14 +90,13 @@ class PurchasesView(QtWidgets.QWidget):
         action_bar.addWidget(self.btn_save)
         v.addLayout(action_bar)
 
-        self.btn_add.clicked.connect(self._add_item_dialog)
         self.btn_remove.clicked.connect(self._remove_item)
         self.btn_clear.clicked.connect(self._clear_items)
         self.btn_save.clicked.connect(self._save_purchase)
         self.btn_cancel_edit.clicked.connect(self._cancel_edit)
         self.items_table.itemChanged.connect(self._on_item_changed)
         # Keyboard shortcuts similar to POS
-        QtWidgets.QShortcut(QtGui.QKeySequence("F2"), self, activated=self._add_item_dialog)
+        QtWidgets.QShortcut(QtGui.QKeySequence("F2"), self, activated=self._focus_search)
         QtWidgets.QShortcut(QtGui.QKeySequence(QtCore.Qt.Key_Delete), self, activated=self._remove_item)
 
     def _build_history(self, parent):
@@ -99,6 +116,7 @@ class PurchasesView(QtWidgets.QWidget):
         self.history_table.setHorizontalHeaderLabels(["ID", "Date", "Supplier", "Items", "Total"])
         self.history_table.horizontalHeader().setStretchLastSection(True)
         self.history_table.setColumnHidden(0, True)
+        self.history_table.setAlternatingRowColors(True)
         v.addWidget(self.history_table)
 
         self.btn_refresh.clicked.connect(self.refresh_history)
@@ -138,18 +156,19 @@ class PurchasesView(QtWidgets.QWidget):
         retail.setMaximum(10**9)
         retail.setDecimals(2)
         retail.setValue(0.0)
-        retail.setEnabled(False)
         cut_rate = QtWidgets.QCheckBox("Cut rate item")
         trade = QtWidgets.QDoubleSpinBox()
         trade.setMaximum(10**9)
         trade.setDecimals(2)
         trade.setValue(0.0)
         trade.setEnabled(False)
+        available_lbl = QtWidgets.QLabel("Available: -")
         form = QtWidgets.QFormLayout()
         form.addRow("Quantity", qty)
         form.addRow("Retail Price", retail)
         form.addRow("Cut rate", cut_rate)
         form.addRow("Trade Price", trade)
+        form.addRow("In Stock", available_lbl)
         v.addLayout(form)
         btns = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
         v.addWidget(btns)
@@ -165,7 +184,9 @@ class PurchasesView(QtWidgets.QWidget):
                 name = str(p.get("name", ""))
                 if needle in name.lower():
                     company = str(p.get("company_name", ""))
+                    qty_avail = p.get("quantity", 0)
                     label = f"{name} ({company})" if company else name
+                    label = f"{label} • Stock: {qty_avail}"
                     item = QtWidgets.QListWidgetItem(label)
                     item.setData(QtCore.Qt.UserRole, int(p.get("id")))
                     results.addItem(item)
@@ -183,6 +204,10 @@ class PurchasesView(QtWidgets.QWidget):
                         trade.setValue(float(prod.get("price", 0.0)))
                 except Exception:
                     pass
+                try:
+                    available_lbl.setText(f"Available: {int(prod.get('quantity', 0) or 0)}")
+                except Exception:
+                    available_lbl.setText("Available: -")
 
         search.textChanged.connect(_populate)
         results.currentItemChanged.connect(lambda _cur, _prev: _sync_price())
@@ -194,6 +219,7 @@ class PurchasesView(QtWidgets.QWidget):
         spin.setMaximum(10**9)
         spin.setDecimals(2)
         spin.setValue(float(value))
+        spin.setButtonSymbols(QtWidgets.QAbstractSpinBox.NoButtons)
         return spin
 
     def _make_pct_spin(self, value):
@@ -201,31 +227,101 @@ class PurchasesView(QtWidgets.QWidget):
         spin.setRange(0.0, 100.0)
         spin.setDecimals(2)
         spin.setValue(float(value))
+        spin.setButtonSymbols(QtWidgets.QAbstractSpinBox.NoButtons)
         return spin
 
     def _make_qty_spin(self, value):
         spin = QtWidgets.QSpinBox()
         spin.setRange(1, 10**9)
         spin.setValue(int(value))
+        spin.setButtonSymbols(QtWidgets.QAbstractSpinBox.NoButtons)
         return spin
 
-    def _add_item_dialog(self):
+    # ---------- Search like POS ----------
+    def _focus_search(self):
+        self.search.setFocus()
+        self.search.selectAll()
+
+    def _on_search_changed(self, text: str):
+        text_raw = (text or "").strip()
+        text_l = text_raw.lower()
+        self.results.clear()
         products = self._load_products()
-        if not products:
-            QtWidgets.QMessageBox.information(self, "No Products", "Add products first.")
+        if not text_l:
+            self.results.setVisible(False)
             return
-        d, results, qty, retail, cut_rate, trade = self._product_picker(self)
-        if d.exec_() != QtWidgets.QDialog.Accepted:
+        count = 0
+        for p in products:
+            try:
+                name = str(p.get("name", ""))
+                company = str(p.get("company_name", ""))
+                barcode = str(p.get("barcode", "") or "")
+                pid = str(p.get("id", ""))
+                if (
+                    text_l in name.lower()
+                    or (company and text_l in company.lower())
+                    or (barcode and text_l in barcode.lower())
+                    or (text_raw.isdigit() and text_raw == pid)
+                ):
+                    qty_avail = p.get("quantity", 0)
+                    label = f"{name} ({company})" if company else name
+                    if barcode:
+                        label = f"{label} • {barcode}"
+                    label = f"{label} • Stock: {qty_avail}"
+                    item = QtWidgets.QListWidgetItem(label)
+                    item.setData(QtCore.Qt.UserRole, int(p.get("id")))
+                    self.results.addItem(item)
+                    count += 1
+                    if count >= 100:
+                        break
+            except Exception:
+                pass
+        self.results.setVisible(self.results.count() > 0)
+        if self.results.count() > 0:
+            self.results.setCurrentRow(0)
+
+    def _add_first_search_result(self):
+        item = self.results.currentItem() if self.results.isVisible() else None
+        if item is None and self.results.count() > 0:
+            item = self.results.item(0)
+        if item is None:
             return
-        item = results.currentItem()
-        if not item:
-            QtWidgets.QMessageBox.information(self, "Select", "Select a product from the search results.")
+        self._on_result_activate(item)
+
+    def _on_result_activate(self, item: QtWidgets.QListWidgetItem):
+        pid = int(item.data(QtCore.Qt.UserRole) or 0)
+        products = self._load_products()
+        prod = next((p for p in products if int(p.get("id", 0) or 0) == pid), None)
+        if not prod:
             return
-        pid = item.data(QtCore.Qt.UserRole)
-        prod = next((p for p in products if int(p.get("id")) == int(pid)), None)
-        name = prod.get("name", f"ID {pid}") if prod else f"ID {pid}"
-        company_id = int(prod.get("company_id", 0)) if prod else 0
-        self._add_row(pid, name, qty.value(), retail.value(), company_id, cut_rate.isChecked(), trade.value())
+        row = self._add_product_to_table(prod)
+        if row is None:
+            return
+        self.search.clear()
+        self.results.setVisible(False)
+
+    def _add_product_to_table(self, product: dict):
+        existing = self._find_row_for_product(int(product.get("id", 0) or 0))
+        if existing is not None:
+            QtWidgets.QMessageBox.warning(self, "Already added", "This product is already in the list.")
+            self._focus_items_cell(existing, 1)
+            return None
+        name = str(product.get("name", ""))
+        company = str(product.get("company_name", ""))
+        label = f"{name} ({company})" if company else name
+        pid = int(product.get("id", 0) or 0)
+        company_id = int(product.get("company_id", 0) or 0)
+        retail = float(product.get("price", 0.0) or 0.0)
+        discount = float(product.get("discount_pct", product.get("purchase_discount", 0.0)) or 0.0)
+        trade = product.get("trade_price")
+        if trade is None:
+            try:
+                trade = retail * (1.0 - (discount / 100.0))
+            except Exception:
+                trade = retail
+        row = self._add_row(pid, label, 1, retail, company_id, False, float(trade or retail), discount, 0.0)
+        self._focus_items_cell(row, 1)
+        return row
 
 
     def _add_row(self, prod_id, prod_name, qty, retail_price, company_id=0, is_cut_rate=False, trade_price=0.0, discount_pct=0.0, extra_pct=0.0):
@@ -236,7 +332,6 @@ class PurchasesView(QtWidgets.QWidget):
         prod_item.setFlags(prod_item.flags() & ~QtCore.Qt.ItemIsEditable)
         self.items_table.setItem(r, 0, prod_item)
         retail_spin = self._make_money_spin(retail_price)
-        retail_spin.setEnabled(False)
         self.items_table.setCellWidget(r, 1, retail_spin)
         pct_spin = self._make_pct_spin(discount_pct)
         extra_spin = self._make_pct_spin(extra_pct)
@@ -262,6 +357,7 @@ class PurchasesView(QtWidgets.QWidget):
         self._recalc_row(r)
         self._recalc_total()
         self._focus_items_cell(r, 2)
+        return r
 
     def _on_widget_changed(self, widget):
         row = self._find_row_for_widget(widget)
@@ -275,6 +371,16 @@ class PurchasesView(QtWidgets.QWidget):
             for c in (1, 2, 4, 5):
                 if self.items_table.cellWidget(r, c) is widget:
                     return r
+        return None
+
+    def _find_row_for_product(self, pid: int):
+        for r in range(self.items_table.rowCount()):
+            try:
+                meta = self.items_table.item(r, 0).data(QtCore.Qt.UserRole) or {}
+                if int(meta.get("product_id", 0) or 0) == pid:
+                    return r
+            except Exception:
+                pass
         return None
 
     def _recalc_row(self, row):
@@ -307,6 +413,8 @@ class PurchasesView(QtWidgets.QWidget):
         self.total_label.setText(f"Total: {total:.2f}")
 
     def _focus_items_cell(self, row: int, col: int):
+        if row is None or col is None:
+            return
         self.items_table.setCurrentCell(row, col)
         w = self.items_table.cellWidget(row, col)
         if w:
@@ -523,19 +631,29 @@ class PurchasesView(QtWidgets.QWidget):
 
     # ---------- Keyboard navigation ----------
     def eventFilter(self, obj, event):
-        if obj is self.items_table and event.type() == QtCore.QEvent.KeyPress:
+        table = getattr(self, "items_table", None)
+        if obj is table and event.type() == QtCore.QEvent.KeyPress:
             if event.key() in (QtCore.Qt.Key_Return, QtCore.Qt.Key_Enter):
                 self._focus_next_item_field()
                 return True
             if event.key() == QtCore.Qt.Key_Delete:
                 self._remove_item()
                 return True
+        if obj is getattr(self, "search", None) and event.type() == QtCore.QEvent.KeyPress:
+            if event.key() == QtCore.Qt.Key_Down and self.results.isVisible() and self.results.count() > 0:
+                row = self.results.currentRow()
+                self.results.setCurrentRow(min(self.results.count() - 1, row + 1))
+                return True
+            if event.key() == QtCore.Qt.Key_Up and self.results.isVisible() and self.results.count() > 0:
+                row = self.results.currentRow()
+                self.results.setCurrentRow(max(0, row - 1))
+                return True
         return super().eventFilter(obj, event)
 
     def _focus_next_item_field(self):
         if self.items_table.rowCount() == 0:
             return
-        editable_cols = [2, 4, 5]  # discount, addl %, qty
+        editable_cols = [1, 2, 4, 5]  # retail, discount, addl %, qty
         row = self.items_table.currentRow()
         if row < 0:
             row = 0
@@ -547,7 +665,7 @@ class PurchasesView(QtWidgets.QWidget):
         except Exception:
             cut = False
         if cut:
-            editable_cols = [2, 3, 4, 5]
+            editable_cols = [1, 2, 3, 4, 5]
         for c in editable_cols:
             if self.items_table.cellWidget(row, c) is focus_w:
                 col = c
@@ -556,6 +674,13 @@ class PurchasesView(QtWidgets.QWidget):
             idx = editable_cols.index(col)
         except ValueError:
             idx = -1
+        # At end of row
+        if idx == len(editable_cols) - 1:
+            if row + 1 < self.items_table.rowCount():
+                self._focus_items_cell(row + 1, editable_cols[0])
+            else:
+                self._focus_search()
+            return
         if idx + 1 < len(editable_cols):
             next_row, next_col = row, editable_cols[idx + 1]
         else:

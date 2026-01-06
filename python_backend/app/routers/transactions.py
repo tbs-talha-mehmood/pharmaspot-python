@@ -129,7 +129,22 @@ def delete_transaction(transaction_id: int, db: Session = Depends(get_db)):
     t = db.query(Transaction).filter(Transaction.id == transaction_id).first()
     if not t:
         raise HTTPException(status_code=404, detail="Transaction not found")
-    # Do not revert stock; assume items already sold. If needed, could add a restock flag here.
+    # If inventory was deducted, add stock back before deletion
+    if t.inventory_deducted:
+        try:
+            items = json.loads(t.items_json or "[]")
+        except Exception:
+            items = []
+        for it in items:
+            try:
+                pid = int(it.get("id"))
+                qty = int(it.get("quantity", 0))
+                prod = db.query(Product).filter(Product.id == pid).first()
+                if prod and prod.quantity is not None:
+                    prod.quantity = int(prod.quantity) + qty
+                    db.add(prod)
+            except Exception:
+                pass
     db.delete(t)
     db.commit()
     return {"ok": True}

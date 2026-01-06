@@ -54,6 +54,12 @@ def _apply_purchase_item(prod: Product, item: PurchaseItem) -> None:
     if prod.quantity is None:
         prod.quantity = 0
     prod.quantity = int(prod.quantity) + int(item.quantity or 0)
+    # Update retail price if provided
+    try:
+        if item.retail_price is not None:
+            prod.price = float(item.retail_price or 0.0)
+    except Exception:
+        pass
     # Derive discount if missing using retail/trade when available
     discount_val = item.discount_pct
     if discount_val is None:

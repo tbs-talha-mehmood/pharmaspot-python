@@ -11,7 +11,9 @@ class ProductsView(QtWidgets.QWidget):
     def _build(self):
         layout = QtWidgets.QVBoxLayout(self)
         header = QtWidgets.QHBoxLayout()
-        header.addWidget(QtWidgets.QLabel("Products"))
+        title = QtWidgets.QLabel("Products")
+        title.setObjectName("title")
+        header.addWidget(title)
         self.filter_company = QtWidgets.QComboBox()
         self.filter_company.setMinimumWidth(200)
         self.filter_company.addItem("All companies", 0)
@@ -34,6 +36,7 @@ class ProductsView(QtWidgets.QWidget):
         self.table = QtWidgets.QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(["ID", "Barcode", "Name", "Qty", "Price", "Company"])
         self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setAlternatingRowColors(True)
         layout.addWidget(self.table)
 
         pager = QtWidgets.QHBoxLayout()

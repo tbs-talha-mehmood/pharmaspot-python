@@ -10,6 +10,7 @@ from PyQt5 import QtWidgets, QtCore
 import requests
 from api import ApiClient
 from app import PharmaApp
+from theme import apply_theme
 
 
 def find_open_port() -> int:
@@ -101,6 +102,7 @@ def main():
                 time.sleep(0.1)
 
     app = QtWidgets.QApplication(sys.argv)
+    apply_theme(app)
     client = ApiClient(api_url)
     shell = PharmaApp(client)
     w = QtWidgets.QMainWindow()

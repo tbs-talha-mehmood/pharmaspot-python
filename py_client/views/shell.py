@@ -21,6 +21,7 @@ class ShellView(QtWidgets.QWidget):
         layout = QtWidgets.QHBoxLayout(self)
 
         self.nav = QtWidgets.QListWidget()
+        self.nav.setObjectName("sideNav")
         self.nav.setFixedWidth(200)
         layout.addWidget(self.nav)
 

@@ -11,7 +11,7 @@ class LoginView(QtWidgets.QWidget):
     def _build(self):
         layout = QtWidgets.QVBoxLayout(self)
         title = QtWidgets.QLabel("Login")
-        title.setStyleSheet("font-size:18px;font-weight:bold")
+        title.setObjectName("title")
         layout.addWidget(title)
 
         form = QtWidgets.QFormLayout()
@@ -23,7 +23,7 @@ class LoginView(QtWidgets.QWidget):
         layout.addLayout(form)
 
         self.message = QtWidgets.QLabel()
-        self.message.setStyleSheet("color:#b00")
+        self.message.setObjectName("error")
         layout.addWidget(self.message)
 
         btn = QtWidgets.QPushButton("Sign In")
@@ -48,4 +48,3 @@ class LoginView(QtWidgets.QWidget):
                 self.message.setText("Invalid credentials")
         except Exception as e:
             self.message.setText(f"API error: {e}")
-
