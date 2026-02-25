@@ -1343,8 +1343,13 @@ class POSView(QtWidgets.QWidget):
         if not sel:
             return
         idx = int(sel.data(QtCore.Qt.UserRole))
-        snap = self.held_sales.pop(idx)
-        self._load_cart_from_snapshot(snap)
+        selected_snap = self.held_sales.pop(idx)
+        # If user switches holds while cart has items, park current cart back into holds.
+        if self.table.rowCount() > 0:
+            parked = self._snapshot_cart()
+            parked["name"] = f"Hold {datetime.now().strftime('%H:%M:%S')}"
+            self.held_sales.append(parked)
+        self._load_cart_from_snapshot(selected_snap)
 
     def _with_loader(self, message: str, fn, *args, **kwargs):
         dlg = QtWidgets.QProgressDialog(message, None, 0, 0, self)
