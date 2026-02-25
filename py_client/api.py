@@ -120,5 +120,20 @@ class ApiClient:
     def transactions_list(self):
         return self.get("/api/transactions/list").json()
 
+    def transaction_get(self, tid: int):
+        return self.get(f"/api/transactions/transaction/{int(tid)}").json()
+
+    def transaction_payments(self, tid: int):
+        return self.get(f"/api/transactions/transaction/{int(tid)}/payments").json()
+
+    def transaction_payment_update(self, tid: int, payment_id: int, amount: float):
+        return requests.put(
+            self.base_url + f"/api/transactions/transaction/{int(tid)}/payment/{int(payment_id)}",
+            json={"amount": float(amount)},
+        ).json()
+
     def transaction_new(self, payload: dict):
         return self.post_json("/api/transactions/new", payload).json()
+
+    def transaction_update(self, tid: int, payload: dict):
+        return requests.put(self.base_url + f"/api/transactions/transaction/{int(tid)}", json=payload).json()

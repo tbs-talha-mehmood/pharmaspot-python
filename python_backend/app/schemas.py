@@ -196,3 +196,19 @@ class TransactionOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class TransactionPaymentOut(BaseModel):
+    id: int
+    transaction_id: int
+    date: str
+    user_id: int
+    amount: float
+    paid_total: float
+
+    class Config:
+        from_attributes = True
+
+
+class TransactionPaymentEditIn(BaseModel):
+    amount: float

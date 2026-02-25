@@ -95,6 +95,17 @@ class Transaction(Base):
     inventory_deducted = Column(Boolean, default=False)
 
 
+class TransactionPayment(Base):
+    __tablename__ = "transaction_payments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    transaction_id = Column(Integer, index=True, nullable=False)
+    date = Column(String(32), default="")
+    user_id = Column(Integer, default=0)
+    amount = Column(Float, default=0.0)
+    paid_total = Column(Float, default=0.0)
+
+
 # Track per-purchase discount and trade price entries per product
 """
 Note: Columns minStock, purchase_discount, and sale_discount were removed
