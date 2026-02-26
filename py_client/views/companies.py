@@ -29,7 +29,9 @@ class CompaniesView(QtWidgets.QWidget):
 
         self.table = QtWidgets.QTableWidget(0, 2)
         self.table.setHorizontalHeaderLabels(["ID", "Name"])
-        self.table.horizontalHeader().setStretchLastSection(True)
+        hdr = self.table.horizontalHeader()
+        hdr.setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
+        self.table.verticalHeader().setVisible(False)
         self.table.setAlternatingRowColors(True)
         layout.addWidget(self.table)
 

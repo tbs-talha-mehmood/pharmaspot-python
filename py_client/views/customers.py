@@ -29,7 +29,13 @@ class CustomersView(QtWidgets.QWidget):
 
         self.table = QtWidgets.QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(["ID", "Name", "Phone", "Email", "Address"])
-        self.table.horizontalHeader().setStretchLastSection(True)
+        hdr = self.table.horizontalHeader()
+        hdr.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(1, QtWidgets.QHeaderView.Stretch)
+        hdr.setSectionResizeMode(2, QtWidgets.QHeaderView.Stretch)
+        hdr.setSectionResizeMode(3, QtWidgets.QHeaderView.Stretch)
+        hdr.setSectionResizeMode(4, QtWidgets.QHeaderView.Stretch)
+        self.table.verticalHeader().setVisible(False)
         self.table.setAlternatingRowColors(True)
         layout.addWidget(self.table)
 
