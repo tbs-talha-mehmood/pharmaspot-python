@@ -26,7 +26,6 @@ class Product(Base):
     __tablename__ = "products"
 
     id = Column(Integer, primary_key=True, index=True)
-    barcode = Column(Integer, index=True, nullable=True)
     expirationDate = Column(String(32), default="")
     price = Column(Float, default=0.0)
     company_id = Column(Integer, ForeignKey("companies.id"), default=0)

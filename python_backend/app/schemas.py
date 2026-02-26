@@ -46,7 +46,6 @@ class LoginResponse(BaseModel):
 
 class ProductCreate(BaseModel):
     id: Optional[int] = None
-    barcode: Optional[int] = None
     expirationDate: Optional[str] = ""
     price: Optional[float] = 0.0
     company_id: Optional[int] = 0
@@ -63,7 +62,6 @@ class ProductCreate(BaseModel):
 
 class ProductOut(BaseModel):
     id: int
-    barcode: Optional[int]
     expirationDate: str
     price: float
     company_id: int

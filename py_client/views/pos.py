@@ -93,7 +93,7 @@ class POSView(QtWidgets.QWidget):
         search_row = QtWidgets.QHBoxLayout()
         search_row.setSpacing(8)
         self.search = QtWidgets.QLineEdit()
-        self.search.setPlaceholderText("Scan barcode or type to search products…")
+        self.search.setPlaceholderText("Type to search products...")
         self.search.textChanged.connect(self._on_search_changed)
         self.search.returnPressed.connect(self._add_first_search_result)
         self.search.setMinimumHeight(34)
@@ -465,17 +465,13 @@ class POSView(QtWidgets.QWidget):
             try:
                 name = str(p.get("name", ""))
                 company = str(p.get("company_name", ""))
-                barcode = str(p.get("barcode", "") or "")
                 pid = str(p.get("id", ""))
                 if (
                     text_l in name.lower()
                     or (company and text_l in company.lower())
-                    or (barcode and text_l in barcode.lower())
                     or (is_digits and text_raw == pid)
                 ):
                     label = f"{name} ({company})" if company else name
-                    if barcode:
-                        label = f"{label} • {barcode}"
                     item = QtWidgets.QListWidgetItem(label)
                     item.setData(QtCore.Qt.UserRole, int(p.get("id")))
                     self.results.addItem(item)

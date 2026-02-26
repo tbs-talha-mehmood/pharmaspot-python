@@ -33,8 +33,8 @@ class ProductsView(QtWidgets.QWidget):
         header.addWidget(self.search)
         layout.addLayout(header)
 
-        self.table = QtWidgets.QTableWidget(0, 6)
-        self.table.setHorizontalHeaderLabels(["ID", "Barcode", "Name", "Qty", "Price", "Company"])
+        self.table = QtWidgets.QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(["ID", "Name", "Qty", "Price", "Company"])
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setAlternatingRowColors(True)
         layout.addWidget(self.table)
@@ -104,11 +104,10 @@ class ProductsView(QtWidgets.QWidget):
             r = self.table.rowCount()
             self.table.insertRow(r)
             self.table.setItem(r, 0, QtWidgets.QTableWidgetItem(str(p.get("id"))))
-            self.table.setItem(r, 1, QtWidgets.QTableWidgetItem(str(p.get("barcode", ""))))
-            self.table.setItem(r, 2, QtWidgets.QTableWidgetItem(p.get("name", "")))
-            self.table.setItem(r, 3, QtWidgets.QTableWidgetItem(str(p.get("quantity", 0))))
-            self.table.setItem(r, 4, QtWidgets.QTableWidgetItem(str(p.get("price", 0.0))))
-            self.table.setItem(r, 5, QtWidgets.QTableWidgetItem(p.get("company_name", "")))
+            self.table.setItem(r, 1, QtWidgets.QTableWidgetItem(p.get("name", "")))
+            self.table.setItem(r, 2, QtWidgets.QTableWidgetItem(str(p.get("quantity", 0))))
+            self.table.setItem(r, 3, QtWidgets.QTableWidgetItem(str(p.get("price", 0.0))))
+            self.table.setItem(r, 4, QtWidgets.QTableWidgetItem(p.get("company_name", "")))
         self.page_label.setText(f"Page {self._page} / {self._pages}")
         self.btn_prev.setEnabled(self._page > 1)
         self.btn_next.setEnabled(self._page < self._pages)
@@ -140,7 +139,6 @@ class ProductsView(QtWidgets.QWidget):
         d.setWindowTitle(title)
         form = QtWidgets.QFormLayout(d)
         name = QtWidgets.QLineEdit()
-        barcode = QtWidgets.QLineEdit()
         price = QtWidgets.QDoubleSpinBox()
         price.setMaximum(10**9)
         price.setDecimals(2)
@@ -155,7 +153,6 @@ class ProductsView(QtWidgets.QWidget):
             pass
         if existing:
             name.setText(existing.get("name", ""))
-            barcode.setText(str(existing.get("barcode", "") or ""))
             price.setValue(float(existing.get("price", 0.0) or 0.0))
             cid = int(existing.get("company_id") or 0)
             if cid:
@@ -165,14 +162,13 @@ class ProductsView(QtWidgets.QWidget):
             elif existing.get("company_name"):
                 company.setCurrentText(existing.get("company_name"))
         form.addRow("Name", name)
-        form.addRow("Barcode", barcode)
         form.addRow("Price", price)
         form.addRow("Company", company)
         btns = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
         form.addRow(btns)
         btns.accepted.connect(d.accept)
         btns.rejected.connect(d.reject)
-        return d, name, barcode, price, company
+        return d, name, price, company
 
     def _selected_product(self):
         r = self.table.currentRow()
@@ -191,10 +187,10 @@ class ProductsView(QtWidgets.QWidget):
             return None
 
     def add_product_dialog(self):
-        d, name, barcode, price, company = self._product_dialog("Add Product")
+        d, name, price, company = self._product_dialog("Add Product")
         if d.exec_() == QtWidgets.QDialog.Accepted:
             try:
-                payload = self._payload_from_form(name, barcode, price, company)
+                payload = self._payload_from_form(name, price, company)
                 self.api.product_upsert(payload)
                 self.refresh()
             except Exception as e:
@@ -205,10 +201,10 @@ class ProductsView(QtWidgets.QWidget):
         if not existing:
             QtWidgets.QMessageBox.information(self, "Select", "Select a product row first")
             return
-        d, name, barcode, price, company = self._product_dialog("Edit Product", existing)
+        d, name, price, company = self._product_dialog("Edit Product", existing)
         if d.exec_() == QtWidgets.QDialog.Accepted:
             try:
-                payload = self._payload_from_form(name, barcode, price, company)
+                payload = self._payload_from_form(name, price, company)
                 payload["id"] = int(existing.get("id"))
                 self.api.product_upsert(payload)
                 self.refresh()
@@ -228,7 +224,7 @@ class ProductsView(QtWidgets.QWidget):
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Error", str(e))
 
-    def _payload_from_form(self, name, barcode, price, company):
+    def _payload_from_form(self, name, price, company):
         company_id = int(company.currentData() or 0)
         company_name = company.currentText().strip()
         if company_id == 0 and company_name:
@@ -247,7 +243,6 @@ class ProductsView(QtWidgets.QWidget):
             raise ValueError("Price must be greater than 0")
         return {
             "name": name_val,
-            "barcode": int(barcode.text()) if barcode.text().strip().isdigit() else None,
             "price": price.value(),
             "company_id": company_id,
         }

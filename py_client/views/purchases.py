@@ -255,18 +255,14 @@ class PurchasesView(QtWidgets.QWidget):
             try:
                 name = str(p.get("name", ""))
                 company = str(p.get("company_name", ""))
-                barcode = str(p.get("barcode", "") or "")
                 pid = str(p.get("id", ""))
                 if (
                     text_l in name.lower()
                     or (company and text_l in company.lower())
-                    or (barcode and text_l in barcode.lower())
                     or (text_raw.isdigit() and text_raw == pid)
                 ):
                     qty_avail = p.get("quantity", 0)
                     label = f"{name} ({company})" if company else name
-                    if barcode:
-                        label = f"{label} • {barcode}"
                     label = f"{label} • Stock: {qty_avail}"
                     item = QtWidgets.QListWidgetItem(label)
                     item.setData(QtCore.Qt.UserRole, int(p.get("id")))

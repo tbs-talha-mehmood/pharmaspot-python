@@ -168,11 +168,11 @@ def _compute_profit(items: list[TransactionItem], db: Session) -> float:
         if not prod:
             continue
         try:
-            # Use last trade price as proxy for cost
-            cost = float(getattr(prod, 'trade_price', 0.0) or 0.0)
+            # Use last trade price for profit estimate per unit.
+            unit_trade = float(getattr(prod, 'trade_price', 0.0) or 0.0)
             price = float(prod.price or 0.0)
             qty = int(it.quantity or 0)
-            profit += (price - cost) * qty
+            profit += (price - unit_trade) * qty
         except Exception:
             pass
     return profit

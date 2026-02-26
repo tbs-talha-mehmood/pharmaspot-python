@@ -24,7 +24,6 @@ def _to_out(prod: Product, company_map: dict[int, str]) -> ProductOut:
     trade_val = float(getattr(prod, "trade_price", 0.0) or 0.0)
     return ProductOut(
         id=prod.id,
-        barcode=prod.barcode,
         expirationDate=prod.expirationDate or "",
         price=prod.price or 0.0,
         company_id=int(prod.company_id or 0),
@@ -110,7 +109,6 @@ def upsert_product(payload: ProductCreate, db: Session = Depends(get_db)):
         if not company:
             raise HTTPException(status_code=400, detail="Company not found")
 
-    prod.barcode = payload.barcode
     prod.expirationDate = payload.expirationDate or ""
     prod.price = payload.price or 0.0
     prod.company_id = company_id
@@ -136,7 +134,6 @@ def upsert_product(payload: ProductCreate, db: Session = Depends(get_db)):
         trade_val = payload.trade_price
         if trade_val is not None:
             prod.trade_price = float(trade_val or 0.0)
-            prod.cost = float(trade_val or 0.0)
     except Exception:
         pass
     # sale_discount removed (ignored)
