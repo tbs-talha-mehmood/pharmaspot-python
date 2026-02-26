@@ -70,12 +70,8 @@ def _apply_inventory(items: list[TransactionItem], db: Session, add_back: bool) 
         if add_back:
             prod.quantity = int(prod.quantity) + qty
         else:
-            prod.quantity = max(0, int(prod.quantity) - qty)
+            prod.quantity = int(prod.quantity) - qty
         db.add(prod)
-
-
-def _should_deduct_inventory(total: float, paid: float) -> bool:
-    return float(paid or 0.0) >= float(total or 0.0)
 
 
 def _validate_payment_bounds(total: float, paid: float) -> tuple[float, float]:
@@ -197,9 +193,8 @@ def create_transaction(payload: TransactionCreate, db: Session = Depends(get_db)
     obj.profit = _compute_profit(norm_items, db)
     db.add(obj)
     db.flush()
-    # Deduct inventory only if paid >= total and not done before
-    should_deduct = _should_deduct_inventory(total_amount, paid_amount)
-    if should_deduct and not obj.inventory_deducted:
+    # Always deduct inventory at checkout, even for partial payments.
+    if not obj.inventory_deducted:
         _apply_inventory(norm_items, db, add_back=False)
         obj.inventory_deducted = True
     _record_payment(
@@ -283,16 +278,6 @@ def update_transaction_payment(
     prev_paid = float(t.paid or 0.0)
     t.paid = max(0.0, float(new_paid or 0.0))
 
-    # Keep inventory state consistent if payment edits cross paid/full threshold.
-    was_deducted = bool(t.inventory_deducted)
-    should_deduct = _should_deduct_inventory(t.total or 0.0, t.paid or 0.0)
-    if was_deducted and not should_deduct:
-        _apply_inventory(_parse_items_json(t.items_json or "[]"), db, add_back=True)
-        t.inventory_deducted = False
-    elif (not was_deducted) and should_deduct:
-        _apply_inventory(_parse_items_json(t.items_json or "[]"), db, add_back=False)
-        t.inventory_deducted = True
-
     # Keep profit update deterministic when invoice lines were unchanged.
     if abs(float(prev_paid or 0.0) - float(t.paid or 0.0)) > 1e-9:
         t.profit = _compute_profit(_parse_items_json(t.items_json or "[]"), db)
@@ -313,13 +298,11 @@ def update_transaction(transaction_id: int, payload: TransactionCreate, db: Sess
     norm_items = _normalize_items(payload.items)
     prev_items = _parse_items_json(t.items_json or "[]")
     was_deducted = bool(t.inventory_deducted)
-    should_deduct = _should_deduct_inventory(total_amount, new_paid)
     # Keep inventory balanced when editing an existing invoice.
     if was_deducted:
         _apply_inventory(prev_items, db, add_back=True)
-    if should_deduct:
-        _apply_inventory(norm_items, db, add_back=False)
-    t.inventory_deducted = should_deduct
+    _apply_inventory(norm_items, db, add_back=False)
+    t.inventory_deducted = True
     # Update values
     t.user_id = payload.user_id or 0
     t.customer_id = payload.customer_id or 0

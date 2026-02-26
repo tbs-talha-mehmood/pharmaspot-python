@@ -194,13 +194,16 @@ class ProductsView(QtWidgets.QWidget):
 
     def add_product_dialog(self):
         d, name, price, company = self._product_dialog("Add Product")
-        if d.exec_() == QtWidgets.QDialog.Accepted:
+        while d.exec_() == QtWidgets.QDialog.Accepted:
             try:
                 payload = self._payload_from_form(name, price, company)
-                self.api.product_upsert(payload)
+                resp = self.api.product_upsert(payload)
+                if isinstance(resp, dict) and resp.get("detail") and not resp.get("id"):
+                    raise Exception(str(resp.get("detail")))
                 self.refresh()
+                return
             except Exception as e:
-                QtWidgets.QMessageBox.critical(self, "Error", str(e))
+                QtWidgets.QMessageBox.warning(self, "Error", str(e))
 
     def edit_selected(self):
         existing = self._selected_product()
@@ -208,14 +211,17 @@ class ProductsView(QtWidgets.QWidget):
             QtWidgets.QMessageBox.information(self, "Select", "Select a product row first")
             return
         d, name, price, company = self._product_dialog("Edit Product", existing)
-        if d.exec_() == QtWidgets.QDialog.Accepted:
+        while d.exec_() == QtWidgets.QDialog.Accepted:
             try:
                 payload = self._payload_from_form(name, price, company)
                 payload["id"] = int(existing.get("id"))
-                self.api.product_upsert(payload)
+                resp = self.api.product_upsert(payload)
+                if isinstance(resp, dict) and resp.get("detail") and not resp.get("id"):
+                    raise Exception(str(resp.get("detail")))
                 self.refresh()
+                return
             except Exception as e:
-                QtWidgets.QMessageBox.critical(self, "Error", str(e))
+                QtWidgets.QMessageBox.warning(self, "Error", str(e))
 
     def delete_selected(self):
         existing = self._selected_product()
@@ -231,22 +237,30 @@ class ProductsView(QtWidgets.QWidget):
             QtWidgets.QMessageBox.critical(self, "Error", str(e))
 
     def _payload_from_form(self, name, price, company):
-        company_id = int(company.currentData() or 0)
-        company_name = company.currentText().strip()
-        if company_id == 0 and company_name:
-            try:
-                created = self.api.company_upsert({"name": company_name})
-                if isinstance(created, dict) and created.get("id"):
-                    company_id = int(created.get("id"))
-            except Exception:
-                pass
+        try:
+            company_id = int(company.currentData() or 0)
+        except Exception:
+            company_id = 0
+        company_name = (company.currentText() or "").strip()
+        if company_name.lower() == "select or type name":
+            company_name = ""
         name_val = name.text().strip()
         if not name_val:
             raise ValueError("Name is required")
-        if company_id == 0:
-            raise ValueError("Company is required")
         if price.value() <= 0:
             raise ValueError("Price must be greater than 0")
+        if company_id == 0:
+            if not company_name:
+                raise ValueError("Company is required")
+            created = self.api.company_upsert({"name": company_name})
+            if isinstance(created, dict) and created.get("detail") and not created.get("id"):
+                raise ValueError(str(created.get("detail")))
+            try:
+                company_id = int((created or {}).get("id", 0) or 0)
+            except Exception:
+                company_id = 0
+            if company_id == 0:
+                raise ValueError("Company is required")
         return {
             "name": name_val,
             "price": price.value(),
