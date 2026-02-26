@@ -347,6 +347,13 @@ class PurchasesView(QtWidgets.QWidget):
             widget = self.items_table.cellWidget(r, col)
             if widget:
                 widget.valueChanged.connect(lambda _=None, w=widget: self._on_widget_changed(w))
+                widget.installEventFilter(self)
+                try:
+                    le = widget.lineEdit() if hasattr(widget, "lineEdit") else None
+                except Exception:
+                    le = None
+                if le is not None:
+                    le.installEventFilter(self)
         cut_cb.toggled.connect(lambda _checked, row=r: self._on_cut_toggled(row))
 
         self._apply_cut_state(r)
@@ -420,6 +427,42 @@ class PurchasesView(QtWidgets.QWidget):
                     w.lineEdit().selectAll()
                 except Exception:
                     pass
+
+    def _editable_cols_for_row(self, row: int):
+        cols = [1, 2, 4, 5]  # retail, discount, addl %, qty
+        try:
+            cut_w = self.items_table.cellWidget(row, 7)
+            if cut_w is not None and bool(cut_w.isChecked()):
+                cols = [1, 2, 3, 4, 5]  # include editable Trade when cut rate is enabled
+        except Exception:
+            pass
+        return cols
+
+    def _item_widget_position(self, obj):
+        for r in range(self.items_table.rowCount()):
+            for c in (1, 2, 4, 5):
+                w = self.items_table.cellWidget(r, c)
+                if w is None:
+                    continue
+                if obj is w:
+                    return r, c
+                try:
+                    le = w.lineEdit() if hasattr(w, "lineEdit") else None
+                except Exception:
+                    le = None
+                if le is not None and obj is le:
+                    return r, c
+        return None, None
+
+    def _focus_items_from_search(self):
+        if self.items_table.rowCount() <= 0:
+            return
+        row = self.items_table.currentRow()
+        if row < 0 or row >= self.items_table.rowCount():
+            row = self.items_table.rowCount() - 1
+        editable_cols = self._editable_cols_for_row(row)
+        target_col = 2 if 2 in editable_cols else editable_cols[0]
+        self._focus_items_cell(row, target_col)
 
     def _remove_item(self):
         r = self.items_table.currentRow()
@@ -627,43 +670,83 @@ class PurchasesView(QtWidgets.QWidget):
 
     # ---------- Keyboard navigation ----------
     def eventFilter(self, obj, event):
-        table = getattr(self, "items_table", None)
-        if obj is table and event.type() == QtCore.QEvent.KeyPress:
-            if event.key() in (QtCore.Qt.Key_Return, QtCore.Qt.Key_Enter):
-                self._focus_next_item_field()
-                return True
-            if event.key() == QtCore.Qt.Key_Delete:
-                self._remove_item()
-                return True
-        if obj is getattr(self, "search", None) and event.type() == QtCore.QEvent.KeyPress:
-            if event.key() == QtCore.Qt.Key_Down and self.results.isVisible() and self.results.count() > 0:
-                row = self.results.currentRow()
-                self.results.setCurrentRow(min(self.results.count() - 1, row + 1))
-                return True
-            if event.key() == QtCore.Qt.Key_Up and self.results.isVisible() and self.results.count() > 0:
-                row = self.results.currentRow()
-                self.results.setCurrentRow(max(0, row - 1))
-                return True
+        if event.type() == QtCore.QEvent.KeyPress:
+            key = event.key()
+            table = getattr(self, "items_table", None)
+            search = getattr(self, "search", None)
+            if obj is search:
+                if key in (QtCore.Qt.Key_Up, QtCore.Qt.Key_Down):
+                    if self.results.isVisible() and self.results.count() > 0:
+                        row = self.results.currentRow()
+                        if row < 0:
+                            row = 0
+                        if key == QtCore.Qt.Key_Up:
+                            row = max(0, row - 1)
+                        else:
+                            row = min(self.results.count() - 1, row + 1)
+                        self.results.setCurrentRow(row)
+                        return True
+                    if key == QtCore.Qt.Key_Down and table is not None and table.rowCount() > 0:
+                        self._focus_items_from_search()
+                        return True
+                elif key in (QtCore.Qt.Key_Return, QtCore.Qt.Key_Enter):
+                    if self.results.isVisible() and self.results.currentItem():
+                        self._add_first_search_result()
+                        return True
+                    if table is not None and table.rowCount() > 0:
+                        self._focus_items_from_search()
+                        return True
+                elif key == QtCore.Qt.Key_Right:
+                    if table is not None and table.rowCount() > 0:
+                        self._focus_items_from_search()
+                        return True
+            elif obj is table:
+                if key in (QtCore.Qt.Key_Return, QtCore.Qt.Key_Enter):
+                    self._focus_next_item_field()
+                    return True
+                if key == QtCore.Qt.Key_Left:
+                    self._focus_prev_item_field()
+                    return True
+                if key == QtCore.Qt.Key_Right:
+                    self._focus_next_item_field()
+                    return True
+                if key == QtCore.Qt.Key_Delete:
+                    self._remove_item()
+                    return True
+            else:
+                row, col = self._item_widget_position(obj)
+                if row is not None and col is not None:
+                    self.items_table.setCurrentCell(row, col)
+                    if key == QtCore.Qt.Key_Left:
+                        self._focus_prev_item_field()
+                        return True
+                    if key == QtCore.Qt.Key_Right:
+                        self._focus_next_item_field()
+                        return True
+                    if key in (QtCore.Qt.Key_Return, QtCore.Qt.Key_Enter):
+                        self._focus_next_item_field()
+                        return True
         return super().eventFilter(obj, event)
 
     def _focus_next_item_field(self):
         if self.items_table.rowCount() == 0:
             return
-        editable_cols = [1, 2, 4, 5]  # retail, discount, addl %, qty
         row = self.items_table.currentRow()
         if row < 0:
             row = 0
+        editable_cols = self._editable_cols_for_row(row)
         col = self.items_table.currentColumn()
         focus_w = self.focusWidget()
-        # If cut rate, allow trade price edit
-        try:
-            cut = bool(self.items_table.cellWidget(row, 7).isChecked())
-        except Exception:
-            cut = False
-        if cut:
-            editable_cols = [1, 2, 3, 4, 5]
         for c in editable_cols:
-            if self.items_table.cellWidget(row, c) is focus_w:
+            w = self.items_table.cellWidget(row, c)
+            if w is focus_w:
+                col = c
+                break
+            try:
+                le = w.lineEdit() if (w is not None and hasattr(w, "lineEdit")) else None
+            except Exception:
+                le = None
+            if le is focus_w:
                 col = c
                 break
         try:
@@ -673,7 +756,8 @@ class PurchasesView(QtWidgets.QWidget):
         # At end of row
         if idx == len(editable_cols) - 1:
             if row + 1 < self.items_table.rowCount():
-                self._focus_items_cell(row + 1, editable_cols[0])
+                next_cols = self._editable_cols_for_row(row + 1)
+                self._focus_items_cell(row + 1, next_cols[0])
             else:
                 self._focus_search()
             return
@@ -684,3 +768,37 @@ class PurchasesView(QtWidgets.QWidget):
         if next_row >= self.items_table.rowCount():
             next_row = row
         self._focus_items_cell(next_row, next_col)
+
+    def _focus_prev_item_field(self):
+        if self.items_table.rowCount() == 0:
+            return
+        row = self.items_table.currentRow()
+        if row < 0:
+            row = 0
+        editable_cols = self._editable_cols_for_row(row)
+        col = self.items_table.currentColumn()
+        focus_w = self.focusWidget()
+        for c in editable_cols:
+            w = self.items_table.cellWidget(row, c)
+            if w is focus_w:
+                col = c
+                break
+            try:
+                le = w.lineEdit() if (w is not None and hasattr(w, "lineEdit")) else None
+            except Exception:
+                le = None
+            if le is focus_w:
+                col = c
+                break
+        try:
+            idx = editable_cols.index(col)
+        except ValueError:
+            idx = 0
+        if idx <= 0:
+            if row - 1 >= 0:
+                prev_cols = self._editable_cols_for_row(row - 1)
+                self._focus_items_cell(row - 1, prev_cols[-1])
+            else:
+                self._focus_search()
+            return
+        self._focus_items_cell(row, editable_cols[idx - 1])
