@@ -27,28 +27,29 @@ class PurchasesView(QtWidgets.QWidget):
     def _build_new_purchase(self, parent):
         v = QtWidgets.QVBoxLayout(parent)
 
-        form = QtWidgets.QFormLayout()
+        top_row = QtWidgets.QHBoxLayout()
+        top_row.setSpacing(8)
+        top_row.addWidget(QtWidgets.QLabel("Supplier"))
         self.supplier_cb = QtWidgets.QComboBox()
         self.supplier_cb.setEditable(True)
+        self.supplier_cb.setMinimumWidth(260)
+        supplier_line = self.supplier_cb.lineEdit()
+        if supplier_line is not None:
+            supplier_line.returnPressed.connect(self._focus_search)
         self._load_suppliers()
-        form.addRow("Supplier", self.supplier_cb)
-        v.addLayout(form)
+        top_row.addWidget(self.supplier_cb)
+        top_row.addWidget(QtWidgets.QLabel("Product"))
 
-        hint = QtWidgets.QLabel("Trade = Retail minus % Discount; Addl % applies to Trade.")
-        v.addWidget(hint)
-
-        # Inline search (POS-style)
-        search_row = QtWidgets.QHBoxLayout()
         self.search = QtWidgets.QLineEdit()
         self.search.setPlaceholderText("Search product by name")
         self.search.textChanged.connect(self._on_search_changed)
         self.search.returnPressed.connect(self._add_first_search_result)
         self.search.installEventFilter(self)
-        search_row.addWidget(self.search, 1)
+        top_row.addWidget(self.search, 1)
         self.refresh_btn = QtWidgets.QPushButton("Refresh")
         self.refresh_btn.clicked.connect(lambda: self._load_products(force=True))
-        search_row.addWidget(self.refresh_btn)
-        v.addLayout(search_row)
+        top_row.addWidget(self.refresh_btn)
+        v.addLayout(top_row)
 
         self.results = QtWidgets.QListWidget()
         self.results.setVisible(False)
@@ -56,9 +57,9 @@ class PurchasesView(QtWidgets.QWidget):
         self.results.itemActivated.connect(self._on_result_activate)
         v.addWidget(self.results)
 
-        self.items_table = QtWidgets.QTableWidget(0, 8)
+        self.items_table = QtWidgets.QTableWidget(0, 7)
         self.items_table.setHorizontalHeaderLabels(
-            ["Product", "Retail", "% Discount", "Trade", "Addl %", "Qty", "Line Total", "Cut"]
+            ["Product", "Retail", "% Discount", "Trade", "Addl %", "Qty", "Line Total"]
         )
         self.items_table.horizontalHeader().setStretchLastSection(True)
         self.items_table.setAlternatingRowColors(True)
@@ -94,7 +95,6 @@ class PurchasesView(QtWidgets.QWidget):
         self.btn_clear.clicked.connect(self._clear_items)
         self.btn_save.clicked.connect(self._save_purchase)
         self.btn_cancel_edit.clicked.connect(self._cancel_edit)
-        self.items_table.itemChanged.connect(self._on_item_changed)
         # Keyboard shortcuts similar to POS
         QtWidgets.QShortcut(QtGui.QKeySequence("F2"), self, activated=self._focus_search)
         QtWidgets.QShortcut(QtGui.QKeySequence(QtCore.Qt.Key_Delete), self, activated=self._remove_item)
@@ -156,17 +156,14 @@ class PurchasesView(QtWidgets.QWidget):
         retail.setMaximum(10**9)
         retail.setDecimals(2)
         retail.setValue(0.0)
-        cut_rate = QtWidgets.QCheckBox("Cut rate item")
         trade = QtWidgets.QDoubleSpinBox()
         trade.setMaximum(10**9)
         trade.setDecimals(2)
         trade.setValue(0.0)
-        trade.setEnabled(False)
         available_lbl = QtWidgets.QLabel("Available: -")
         form = QtWidgets.QFormLayout()
         form.addRow("Quantity", qty)
         form.addRow("Retail Price", retail)
-        form.addRow("Cut rate", cut_rate)
         form.addRow("Trade Price", trade)
         form.addRow("In Stock", available_lbl)
         v.addLayout(form)
@@ -200,8 +197,7 @@ class PurchasesView(QtWidgets.QWidget):
             if prod:
                 try:
                     retail.setValue(float(prod.get("price", 0.0)))
-                    if not cut_rate.isChecked():
-                        trade.setValue(float(prod.get("price", 0.0)))
+                    trade.setValue(float(prod.get("price", 0.0)))
                 except Exception:
                     pass
                 try:
@@ -211,8 +207,7 @@ class PurchasesView(QtWidgets.QWidget):
 
         search.textChanged.connect(_populate)
         results.currentItemChanged.connect(lambda _cur, _prev: _sync_price())
-        cut_rate.toggled.connect(lambda checked: trade.setEnabled(checked))
-        return d, results, qty, retail, cut_rate, trade
+        return d, results, qty, retail, trade
 
     def _make_money_spin(self, value):
         spin = QtWidgets.QDoubleSpinBox()
@@ -315,12 +310,12 @@ class PurchasesView(QtWidgets.QWidget):
                 trade = retail * (1.0 - (discount / 100.0))
             except Exception:
                 trade = retail
-        row = self._add_row(pid, label, 1, retail, company_id, False, float(trade or retail), discount, 0.0)
+        row = self._add_row(pid, label, 1, retail, company_id, float(trade or retail), discount, 0.0)
         self._focus_items_cell(row, 1)
         return row
 
 
-    def _add_row(self, prod_id, prod_name, qty, retail_price, company_id=0, is_cut_rate=False, trade_price=0.0, discount_pct=0.0, extra_pct=0.0):
+    def _add_row(self, prod_id, prod_name, qty, retail_price, company_id=0, trade_price=0.0, discount_pct=0.0, extra_pct=0.0):
         r = self.items_table.rowCount()
         self.items_table.insertRow(r)
         prod_item = QtWidgets.QTableWidgetItem(prod_name)
@@ -334,14 +329,11 @@ class PurchasesView(QtWidgets.QWidget):
         qty_spin = self._make_qty_spin(qty)
         trade_item = QtWidgets.QTableWidgetItem(f"{float(trade_price or retail_price):.2f}")
         trade_item.setFlags(trade_item.flags() & ~QtCore.Qt.ItemIsEditable)
-        cut_cb = QtWidgets.QCheckBox()
-        cut_cb.setChecked(bool(is_cut_rate))
         self.items_table.setCellWidget(r, 2, pct_spin)
         self.items_table.setItem(r, 3, trade_item)
         self.items_table.setCellWidget(r, 4, extra_spin)
         self.items_table.setCellWidget(r, 5, qty_spin)
         self.items_table.setItem(r, 6, QtWidgets.QTableWidgetItem("0.00"))
-        self.items_table.setCellWidget(r, 7, cut_cb)
 
         for col in (1, 2, 4, 5):
             widget = self.items_table.cellWidget(r, col)
@@ -354,9 +346,6 @@ class PurchasesView(QtWidgets.QWidget):
                     le = None
                 if le is not None:
                     le.installEventFilter(self)
-        cut_cb.toggled.connect(lambda _checked, row=r: self._on_cut_toggled(row))
-
-        self._apply_cut_state(r)
         self._recalc_row(r)
         self._recalc_total()
         self._focus_items_cell(r, 2)
@@ -392,16 +381,11 @@ class PurchasesView(QtWidgets.QWidget):
             pct = float(self.items_table.cellWidget(row, 2).value())
             extra = float(self.items_table.cellWidget(row, 4).value())
             qty = int(self.items_table.cellWidget(row, 5).value())
-            cut = bool(self.items_table.cellWidget(row, 7).isChecked())
-            if cut:
-                trade = float(self.items_table.item(row, 3).text())
-                final = trade
-            else:
-                trade = retail * (1.0 - (pct / 100.0))
-                final = trade * (1.0 - (extra / 100.0))
-                self._suppress_item_change = True
-                self.items_table.item(row, 3).setText(f"{trade:.2f}")
-                self._suppress_item_change = False
+            trade = retail * (1.0 - (pct / 100.0))
+            final = trade * (1.0 - (extra / 100.0))
+            self._suppress_item_change = True
+            self.items_table.item(row, 3).setText(f"{trade:.2f}")
+            self._suppress_item_change = False
             self.items_table.item(row, 6).setText(f"{final * qty:.2f}")
         except Exception:
             pass
@@ -429,14 +413,7 @@ class PurchasesView(QtWidgets.QWidget):
                     pass
 
     def _editable_cols_for_row(self, row: int):
-        cols = [1, 2, 4, 5]  # retail, discount, addl %, qty
-        try:
-            cut_w = self.items_table.cellWidget(row, 7)
-            if cut_w is not None and bool(cut_w.isChecked()):
-                cols = [1, 2, 3, 4, 5]  # include editable Trade when cut rate is enabled
-        except Exception:
-            pass
-        return cols
+        return [1, 2, 4, 5]  # retail, discount, addl %, qty
 
     def _item_widget_position(self, obj):
         for r in range(self.items_table.rowCount()):
@@ -475,8 +452,16 @@ class PurchasesView(QtWidgets.QWidget):
         self._recalc_total()
 
     def _save_purchase(self):
-        sid = self.supplier_cb.currentData() or 0
-        sname = self.supplier_cb.currentText().strip()
+        try:
+            sid = int(self.supplier_cb.currentData() or 0)
+        except Exception:
+            sid = 0
+        sname = (self.supplier_cb.currentText() or "").strip()
+        if sname.lower() == "select or type name":
+            sname = ""
+        if sid <= 0 and not sname:
+            QtWidgets.QMessageBox.information(self, "Supplier required", "Select or type a supplier before saving.")
+            return
         rows = []
         total = 0.0
         for r in range(self.items_table.rowCount()):
@@ -489,13 +474,8 @@ class PurchasesView(QtWidgets.QWidget):
                 pct = float(self.items_table.cellWidget(r, 2).value())
                 extra = float(self.items_table.cellWidget(r, 4).value())
                 qty = int(self.items_table.cellWidget(r, 5).value())
-                cut = bool(self.items_table.cellWidget(r, 7).isChecked())
-                if cut:
-                    trade = float(self.items_table.item(r, 3).text())
-                    final = trade
-                else:
-                    trade = retail * (1.0 - (pct / 100.0))
-                    final = trade * (1.0 - (extra / 100.0))
+                trade = retail * (1.0 - (pct / 100.0))
+                final = trade * (1.0 - (extra / 100.0))
                 rows.append(
                     {
                         "product_id": pid,
@@ -506,7 +486,6 @@ class PurchasesView(QtWidgets.QWidget):
                         "discount_pct": pct,
                         "extra_discount_pct": extra,
                         "trade_price": trade,
-                        "is_cut_rate": cut,
                     }
                 )
                 total += qty * final
@@ -515,10 +494,16 @@ class PurchasesView(QtWidgets.QWidget):
         if not rows:
             QtWidgets.QMessageBox.information(self, "No Items", "Add at least one item.")
             return
-        payload = {"supplier_id": int(sid or 0), "supplier_name": sname, "total": total, "items": rows}
         try:
             if sid == 0 and sname:
-                self.api.company_upsert({"name": sname})
+                created = self.api.company_upsert({"name": sname})
+                if isinstance(created, dict) and created.get("detail"):
+                    raise Exception(str(created.get("detail")))
+                try:
+                    sid = int((created or {}).get("id", 0) or 0)
+                except Exception:
+                    sid = 0
+            payload = {"supplier_id": int(sid or 0), "supplier_name": sname, "total": total, "items": rows}
             if getattr(self, "_edit_purchase_id", None):
                 self.api.purchase_update(int(self._edit_purchase_id), payload)
                 QtWidgets.QMessageBox.information(self, "Saved", "Purchase updated")
@@ -623,44 +608,15 @@ class PurchasesView(QtWidgets.QWidget):
             extra_pct = float(extra_val or 0.0)
             qty = int(it.get("quantity", 1) or 1)
             trade = it.get("trade_price")
-            is_cut = bool(it.get("is_cut_rate")) if it.get("is_cut_rate") is not None else False
             if company_id == 0 and prod:
                 company_id = int(prod.get("company_id", 0) or 0)
             base_price = float(trade or it.get("price", 0.0) or 0.0)
-            self._add_row(pid, name, qty, retail, company_id, is_cut, base_price, discount_pct, extra_pct)
+            self._add_row(pid, name, qty, retail, company_id, base_price, discount_pct, extra_pct)
 
     def _exit_edit_mode(self):
         self._edit_purchase_id = None
         self.btn_save.setText("Save Purchase")
         self.btn_cancel_edit.setVisible(False)
-
-    def _apply_cut_state(self, row):
-        cut = bool(self.items_table.cellWidget(row, 7).isChecked())
-        pct_spin = self.items_table.cellWidget(row, 2)
-        extra_spin = self.items_table.cellWidget(row, 4)
-        trade_item = self.items_table.item(row, 3)
-        if cut:
-            pct_spin.setEnabled(False)
-            extra_spin.setEnabled(False)
-            trade_item.setFlags(trade_item.flags() | QtCore.Qt.ItemIsEditable)
-        else:
-            pct_spin.setEnabled(True)
-            extra_spin.setEnabled(True)
-            trade_item.setFlags(trade_item.flags() & ~QtCore.Qt.ItemIsEditable)
-
-    def _on_cut_toggled(self, row):
-        self._apply_cut_state(row)
-        self._recalc_row(row)
-        self._recalc_total()
-
-    def _on_item_changed(self, item):
-        if self._suppress_item_change:
-            return
-        if item.column() == 3:
-            row = item.row()
-            if self.items_table.cellWidget(row, 7) and self.items_table.cellWidget(row, 7).isChecked():
-                self._recalc_row(row)
-                self._recalc_total()
 
     def _cancel_edit(self):
         if QtWidgets.QMessageBox.question(self, "Cancel Edit", "Discard changes?") != QtWidgets.QMessageBox.Yes:

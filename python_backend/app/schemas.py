@@ -138,7 +138,6 @@ class PurchaseItem(BaseModel):
     discount_pct: Optional[float] = None
     extra_discount_pct: Optional[float] = None
     trade_price: Optional[float] = None
-    is_cut_rate: Optional[bool] = None
 
 
 class PurchaseCreate(BaseModel):

@@ -557,7 +557,6 @@ class POSView(QtWidgets.QWidget):
                 trade = it.get("trade_price", it.get("price", 0.0))
                 disc = it.get("discount_pct", None)
                 extra = it.get("extra_discount_pct", None)
-                cut = bool(it.get("is_cut_rate")) if it.get("is_cut_rate") is not None else False
                 try:
                     retail = float(retail or 0.0)
                 except Exception:
@@ -588,7 +587,6 @@ class POSView(QtWidgets.QWidget):
                         "disc": disc,
                         "extra": extra,
                         "final": final,
-                        "cut": cut,
                     }
                 )
         if not rows:
@@ -599,9 +597,9 @@ class POSView(QtWidgets.QWidget):
         dlg.setWindowTitle(f"Purchases for {name}")
         v = QtWidgets.QVBoxLayout(dlg)
         v.addWidget(QtWidgets.QLabel(f"Recent purchases for {name}"))
-        table = QtWidgets.QTableWidget(len(rows), 9)
+        table = QtWidgets.QTableWidget(len(rows), 8)
         table.setHorizontalHeaderLabels(
-            ["Date", "Supplier", "Qty", "Retail", "Trade", "%Disc", "Addl %", "Line Total", "Cut"]
+            ["Date", "Supplier", "Qty", "Retail", "Trade", "%Disc", "Addl %", "Line Total"]
         )
         table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
         table.setAlternatingRowColors(True)
@@ -616,7 +614,6 @@ class POSView(QtWidgets.QWidget):
             table.setItem(r_idx, 5, QtWidgets.QTableWidgetItem(disc_val))
             table.setItem(r_idx, 6, QtWidgets.QTableWidgetItem(extra_val))
             table.setItem(r_idx, 7, QtWidgets.QTableWidgetItem(f"{row['final'] * row['qty']:.2f}"))
-            table.setItem(r_idx, 8, QtWidgets.QTableWidgetItem("Yes" if row["cut"] else "No"))
         table.resizeRowsToContents()
         v.addWidget(table)
         close_btn = QtWidgets.QPushButton("Close")
@@ -922,15 +919,28 @@ class POSView(QtWidgets.QWidget):
         row = self.table.rowCount()
         pid_for_stock = int(product.get("id", 0) or 0)
         if pid_for_stock:
+            try:
+                current_stock = int(product.get("quantity", 0) or 0)
+            except Exception:
+                current_stock = 0
             existing_row = self._find_row_for_product(pid_for_stock)
             if existing_row is not None:
+                if current_stock <= 0:
+                    QtWidgets.QMessageBox.warning(
+                        self,
+                        "Out of stock",
+                        "Current stock is zero. Product is already in cart and stock can go negative.",
+                    )
                 QtWidgets.QMessageBox.information(self, "Already added", "This product is already in the cart.")
                 self._focus_cart_cell(existing_row, 5)
                 return existing_row
             available = self._available_stock(pid_for_stock)
-            if available <= 0:
-                QtWidgets.QMessageBox.information(self, "Insufficient stock", "No remaining quantity for this product.")
-                return
+            if available <= 0 or current_stock <= 0:
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Out of stock",
+                    "Current stock is zero. Product will be added and stock can go negative.",
+                )
         self.table.insertRow(row)
 
         # Product column
@@ -992,7 +1002,7 @@ class POSView(QtWidgets.QWidget):
         line_total.setFlags(line_total.flags() & ~QtCore.Qt.ItemIsEditable)
         self.table.setItem(row, 6, line_total)
 
-        # Connect recalc triggers (keep qty/discount within stock)
+        # Connect recalc triggers
         for col in (1, 2, 4, 5):
             w = self.table.cellWidget(row, col)
             if w:
@@ -1071,20 +1081,22 @@ class POSView(QtWidgets.QWidget):
             pass
 
     def _on_row_value_changed(self, r: int):
-        # Enforce available stock constraint before recalculating totals
+        # Warn once when user moves this line into negative stock range.
         try:
             meta = self.table.item(r, 0).data(QtCore.Qt.UserRole) or {}
             pid = int(meta.get("id", 0) or 0)
-            if pid:
+            qty_spin = self.table.cellWidget(r, 5)
+            if pid and isinstance(qty_spin, QtWidgets.QSpinBox):
                 max_qty = self._available_stock(pid, exclude_row=r)
-                qty_spin = self.table.cellWidget(r, 5)
-                if qty_spin and qty_spin.value() > max_qty:
-                    qty_spin.setValue(max_qty)
-                    QtWidgets.QMessageBox.information(
+                over = int(qty_spin.value()) > int(max_qty)
+                warned = bool(qty_spin.property("overstock_warned") or False)
+                if over and not warned:
+                    QtWidgets.QMessageBox.warning(
                         self,
-                        "Insufficient stock",
-                        f"Quantity exceeds available stock. Adjusted to {max_qty}.",
+                        "Stock warning",
+                        "Entered quantity is higher than available stock. Stock will go negative.",
                     )
+                qty_spin.setProperty("overstock_warned", over)
         except Exception:
             pass
         self._recalc_row(r)
