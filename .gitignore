@@ -1,0 +1,15 @@
+# Python cache artifacts
+__pycache__/
+*.py[cod]
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+
+# OS artifacts
+.DS_Store
+Thumbs.db
