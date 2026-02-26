@@ -220,6 +220,8 @@ class POSView(QtWidgets.QWidget):
         # Shortcuts
         QtWidgets.QShortcut(QtGui.QKeySequence("F2"), self, activated=self._focus_search)
         QtWidgets.QShortcut(QtGui.QKeySequence("F8"), self, activated=self._show_purchase_history)
+        QtWidgets.QShortcut(QtGui.QKeySequence("F11"), self, activated=self._hold_sale)
+        QtWidgets.QShortcut(QtGui.QKeySequence("F12"), self, activated=self._resume_sale)
         QtWidgets.QShortcut(QtGui.QKeySequence(QtCore.Qt.Key_Delete), self, activated=self._remove_selected_row)
         # Keyboard-only navigation helpers
         self.search.installEventFilter(self)
@@ -1332,11 +1334,16 @@ class POSView(QtWidgets.QWidget):
             item = QtWidgets.QListWidgetItem(f"{label} ({cnt} items) {ts}")
             item.setData(QtCore.Qt.UserRole, idx)
             listw.addItem(item)
+        if listw.count() > 0:
+            listw.setCurrentRow(0)
         v.addWidget(listw)
         btns = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
         btns.accepted.connect(dlg.accept)
         btns.rejected.connect(dlg.reject)
         v.addWidget(btns)
+        listw.itemActivated.connect(lambda _item: dlg.accept())
+        listw.itemDoubleClicked.connect(lambda _item: dlg.accept())
+        QtCore.QTimer.singleShot(0, lambda: listw.setFocus())
         if dlg.exec_() != QtWidgets.QDialog.Accepted:
             return
         sel = listw.currentItem()
