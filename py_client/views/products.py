@@ -112,7 +112,7 @@ class ProductsView(QtWidgets.QWidget):
             self.table.setItem(r, 0, QtWidgets.QTableWidgetItem(str(p.get("id"))))
             self.table.setItem(r, 1, QtWidgets.QTableWidgetItem(p.get("name", "")))
             self.table.setItem(r, 2, QtWidgets.QTableWidgetItem(str(p.get("quantity", 0))))
-            self.table.setItem(r, 3, QtWidgets.QTableWidgetItem(str(p.get("price", 0.0))))
+            self.table.setItem(r, 3, QtWidgets.QTableWidgetItem(f"{float(p.get('price', 0.0) or 0.0):.2f}"))
             self.table.setItem(r, 4, QtWidgets.QTableWidgetItem(p.get("company_name", "")))
         self.page_label.setText(f"Page {self._page} / {self._pages}")
         self.btn_prev.setEnabled(self._page > 1)

@@ -832,7 +832,18 @@ class POSView(QtWidgets.QWidget):
                 continue
             if pid <= 0 or qty <= 0:
                 continue
-            items.append({"id": pid, "quantity": qty})
+            items.append(
+                {
+                    "id": pid,
+                    "quantity": qty,
+                    "name": it.get("name"),
+                    "retail_price": it.get("retail_price"),
+                    "discount_pct": it.get("discount_pct"),
+                    "extra_discount_pct": it.get("extra_discount_pct"),
+                    "trade_price": it.get("trade_price"),
+                    "unit_price": it.get("unit_price"),
+                }
+            )
             original_qty_map[pid] = int(original_qty_map.get(pid, 0) or 0) + qty
         if tx_id <= 0 or not items:
             QtWidgets.QMessageBox.information(self, "Invoice", "Invoice has no editable items.")
@@ -861,21 +872,49 @@ class POSView(QtWidgets.QWidget):
             qty = int(it["quantity"])
             prod = next((p for p in self.products_cache if int(p.get("id", 0) or 0) == pid), None)
             if not prod:
-                prod = {
+                row_seed = {
                     "id": pid,
-                    "name": f"Product #{pid}",
+                    "name": str(it.get("name") or f"Product #{pid}"),
                     "company_id": 0,
                     "company_name": "",
-                    "price": 0.0,
+                    "price": float(it.get("retail_price", 0.0) or 0.0),
                     "quantity": int(original_qty_map.get(pid, 0) or 0),
+                    "discount_pct": float(it.get("discount_pct", 0.0) or 0.0),
+                    "trade_price": float(it.get("trade_price", 0.0) or 0.0),
+                    "extra_discount_pct": float(it.get("extra_discount_pct", 0.0) or 0.0),
                 }
-            row = self._add_product_to_cart(prod)
+            else:
+                row_seed = dict(prod)
+                if it.get("name") is not None:
+                    row_seed["name"] = str(it.get("name") or row_seed.get("name", ""))
+                if it.get("retail_price") is not None:
+                    row_seed["price"] = float(it.get("retail_price", 0.0) or 0.0)
+                if it.get("discount_pct") is not None:
+                    row_seed["discount_pct"] = float(it.get("discount_pct", 0.0) or 0.0)
+                if it.get("trade_price") is not None:
+                    row_seed["trade_price"] = float(it.get("trade_price", 0.0) or 0.0)
+                if it.get("extra_discount_pct") is not None:
+                    row_seed["extra_discount_pct"] = float(it.get("extra_discount_pct", 0.0) or 0.0)
+
+            row = self._add_product_to_cart(row_seed)
             if row is None:
                 skipped.append(str(pid))
                 continue
             qty_spin = self.table.cellWidget(row, 5)
             if isinstance(qty_spin, QtWidgets.QSpinBox):
                 qty_spin.setValue(qty)
+            # Ensure row mirrors saved invoice fields even if product master changed.
+            try:
+                if it.get("retail_price") is not None:
+                    self.table.cellWidget(row, 1).setValue(float(it.get("retail_price", 0.0) or 0.0))
+                if it.get("discount_pct") is not None:
+                    self.table.cellWidget(row, 2).setValue(float(it.get("discount_pct", 0.0) or 0.0))
+                if it.get("extra_discount_pct") is not None:
+                    self.table.cellWidget(row, 4).setValue(float(it.get("extra_discount_pct", 0.0) or 0.0))
+                if it.get("trade_price") is not None:
+                    self.table.item(row, 3).setText(f"{float(it.get('trade_price', 0.0) or 0.0):.2f}")
+            except Exception:
+                pass
             self._recalc_row(row)
 
         self._recalc_totals()
@@ -954,6 +993,7 @@ class POSView(QtWidgets.QWidget):
             {
                 "id": int(product.get("id", 0) or 0),
                 "company_id": int(product.get("company_id", 0) or 0),
+                "name": str(product.get("name", "") or ""),
             },
         )
         self.table.setItem(row, 0, prod_item)
@@ -987,10 +1027,14 @@ class POSView(QtWidgets.QWidget):
                 trade_default = retail * (1.0 - (pct_default / 100.0))
             except Exception:
                 trade_default = None
+        try:
+            extra_default = float(product.get("extra_discount_pct", 0.0) or 0.0)
+        except Exception:
+            extra_default = 0.0
         pct_spin = self._make_pct_spin(pct_default or 0.0)
         trade_item = QtWidgets.QTableWidgetItem(f"{float(trade_default or retail):.2f}")
         trade_item.setFlags(trade_item.flags() & ~QtCore.Qt.ItemIsEditable)
-        extra_spin = self._make_pct_spin(0.0)
+        extra_spin = self._make_pct_spin(extra_default)
         qty_spin = self._make_qty_spin(1)
         self.table.setCellWidget(row, 2, pct_spin)
         self.table.setItem(row, 3, trade_item)
@@ -1282,7 +1326,12 @@ class POSView(QtWidgets.QWidget):
                 "price": it.get("retail", 0.0),
                 "company_name": "",
             }
-            row = self._add_product_to_cart(prod)
+            row_seed = dict(prod)
+            row_seed["price"] = float(it.get("retail", row_seed.get("price", 0.0)) or 0.0)
+            row_seed["discount_pct"] = float(it.get("pct", row_seed.get("discount_pct", 0.0)) or 0.0)
+            row_seed["trade_price"] = float(it.get("trade", row_seed.get("trade_price", 0.0)) or 0.0)
+            row_seed["extra_discount_pct"] = float(it.get("extra", row_seed.get("extra_discount_pct", 0.0)) or 0.0)
+            row = self._add_product_to_cart(row_seed)
             if row is None:
                 continue
             try:
@@ -1421,7 +1470,23 @@ class POSView(QtWidgets.QWidget):
                 qty_w = self.table.cellWidget(r, 5)
                 qty = int(qty_w.value()) if isinstance(qty_w, QtWidgets.QSpinBox) else 1
                 if pid and qty > 0:
-                    items.append({"id": pid, "quantity": qty})
+                    retail = float(self.table.cellWidget(r, 1).value() or 0.0)
+                    pct = float(self.table.cellWidget(r, 2).value() or 0.0)
+                    extra = float(self.table.cellWidget(r, 4).value() or 0.0)
+                    trade = float(self.table.item(r, 3).text() or 0.0)
+                    unit = trade * (1.0 - (extra / 100.0))
+                    items.append(
+                        {
+                            "id": pid,
+                            "quantity": qty,
+                            "name": str(meta.get("name", "") or ""),
+                            "retail_price": retail,
+                            "discount_pct": pct,
+                            "extra_discount_pct": extra,
+                            "trade_price": trade,
+                            "unit_price": unit,
+                        }
+                    )
             except Exception:
                 pass
         if not items:

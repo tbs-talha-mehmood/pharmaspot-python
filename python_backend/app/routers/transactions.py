@@ -25,6 +25,15 @@ def index():
     return "Transactions API"
 
 
+def _as_optional_float(value) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
 def _parse_items_json(items_json: str) -> list[TransactionItem]:
     items: list[TransactionItem] = []
     try:
@@ -38,7 +47,18 @@ def _parse_items_json(items_json: str) -> list[TransactionItem]:
         except Exception:
             continue
         if pid > 0 and qty > 0:
-            items.append(TransactionItem(id=pid, quantity=qty))
+            items.append(
+                TransactionItem(
+                    id=pid,
+                    quantity=qty,
+                    name=str(it.get("name")) if it.get("name") is not None else None,
+                    retail_price=_as_optional_float(it.get("retail_price")),
+                    discount_pct=_as_optional_float(it.get("discount_pct")),
+                    extra_discount_pct=_as_optional_float(it.get("extra_discount_pct")),
+                    trade_price=_as_optional_float(it.get("trade_price")),
+                    unit_price=_as_optional_float(it.get("unit_price")),
+                )
+            )
     return items
 
 
@@ -51,12 +71,37 @@ def _normalize_items(items: list[TransactionItem]) -> list[TransactionItem]:
         except Exception:
             continue
         if pid > 0 and qty > 0:
-            out.append(TransactionItem(id=pid, quantity=qty))
+            out.append(
+                TransactionItem(
+                    id=pid,
+                    quantity=qty,
+                    name=getattr(it, "name", None),
+                    retail_price=_as_optional_float(getattr(it, "retail_price", None)),
+                    discount_pct=_as_optional_float(getattr(it, "discount_pct", None)),
+                    extra_discount_pct=_as_optional_float(getattr(it, "extra_discount_pct", None)),
+                    trade_price=_as_optional_float(getattr(it, "trade_price", None)),
+                    unit_price=_as_optional_float(getattr(it, "unit_price", None)),
+                )
+            )
     return out
 
 
 def _items_json(items: list[TransactionItem]) -> str:
-    return json.dumps([{"id": int(i.id), "quantity": int(i.quantity)} for i in items])
+    payload = []
+    for i in items or []:
+        payload.append(
+            {
+                "id": int(i.id),
+                "quantity": int(i.quantity),
+                "name": getattr(i, "name", None),
+                "retail_price": _as_optional_float(getattr(i, "retail_price", None)),
+                "discount_pct": _as_optional_float(getattr(i, "discount_pct", None)),
+                "extra_discount_pct": _as_optional_float(getattr(i, "extra_discount_pct", None)),
+                "trade_price": _as_optional_float(getattr(i, "trade_price", None)),
+                "unit_price": _as_optional_float(getattr(i, "unit_price", None)),
+            }
+        )
+    return json.dumps(payload)
 
 
 def _apply_inventory(items: list[TransactionItem], db: Session, add_back: bool) -> None:
@@ -136,13 +181,7 @@ def _recompute_payment_totals(db: Session, transaction_id: int) -> float:
 
 
 def _to_dict(t: Transaction) -> TransactionOut:
-    items = []
-    try:
-        raw = json.loads(t.items_json or "[]")
-        for it in raw:
-            items.append(TransactionItem(id=int(it.get("id")), quantity=int(it.get("quantity", 0))))
-    except Exception:
-        pass
+    items = _parse_items_json(t.items_json or "[]")
     return TransactionOut(
         id=t.id,
         date=t.date or "",
@@ -157,27 +196,71 @@ def _to_dict(t: Transaction) -> TransactionOut:
     )
 
 
-def _compute_profit(items: list[TransactionItem], db: Session) -> float:
-    profit = 0.0
-    for it in items:
-        prod = db.query(Product).filter(Product.id == it.id).first()
-        if not prod:
+def _enrich_item_snapshots(items: list[TransactionItem], db: Session) -> list[TransactionItem]:
+    out: list[TransactionItem] = []
+    for it in items or []:
+        pid = int(it.id or 0)
+        qty = max(0, int(it.quantity or 0))
+        if pid <= 0 or qty <= 0:
             continue
-        try:
-            # Use last trade price for profit estimate per unit.
-            unit_trade = float(getattr(prod, 'trade_price', 0.0) or 0.0)
-            price = float(prod.price or 0.0)
-            qty = int(it.quantity or 0)
-            profit += (price - unit_trade) * qty
-        except Exception:
-            pass
-    return profit
+        prod = db.query(Product).filter(Product.id == pid).first()
+
+        name = getattr(it, "name", None)
+        if not name and prod:
+            name = str(getattr(prod, "name", "") or "")
+
+        retail = _as_optional_float(getattr(it, "retail_price", None))
+        if retail is None and prod:
+            retail = _as_optional_float(getattr(prod, "price", None))
+        if retail is None:
+            retail = 0.0
+
+        discount_pct = _as_optional_float(getattr(it, "discount_pct", None))
+        if discount_pct is None and prod:
+            discount_pct = _as_optional_float(getattr(prod, "discount_pct", None))
+        if discount_pct is None:
+            discount_pct = 0.0
+
+        extra_pct = _as_optional_float(getattr(it, "extra_discount_pct", None))
+        if extra_pct is None:
+            extra_pct = 0.0
+
+        trade_price = _as_optional_float(getattr(it, "trade_price", None))
+        if trade_price is None:
+            trade_price = float(retail) * (1.0 - (float(discount_pct) / 100.0))
+
+        unit_price = _as_optional_float(getattr(it, "unit_price", None))
+        if unit_price is None:
+            unit_price = float(trade_price or 0.0) * (1.0 - (float(extra_pct) / 100.0))
+
+        out.append(
+            TransactionItem(
+                id=pid,
+                quantity=qty,
+                name=name,
+                retail_price=retail,
+                discount_pct=discount_pct,
+                extra_discount_pct=extra_pct,
+                trade_price=trade_price,
+                unit_price=unit_price,
+            )
+        )
+    return out
+
+
+def _has_full_item_snapshot(items: list[TransactionItem]) -> bool:
+    required = ("retail_price", "discount_pct", "extra_discount_pct", "trade_price", "unit_price")
+    for it in items or []:
+        for key in required:
+            if getattr(it, key, None) is None:
+                return False
+    return True
 
 
 @router.post("/new", response_model=TransactionOut)
 def create_transaction(payload: TransactionCreate, db: Session = Depends(get_db)):
     now = payload.date or datetime.utcnow().isoformat()
-    norm_items = _normalize_items(payload.items)
+    norm_items = _enrich_item_snapshots(_normalize_items(payload.items), db)
     total_amount, paid_amount = _validate_payment_bounds(payload.total or 0.0, payload.paid or 0.0)
     obj = Transaction(
         date=now,
@@ -190,7 +273,6 @@ def create_transaction(payload: TransactionCreate, db: Session = Depends(get_db)
         discount=payload.discount or 0.0,
         items_json=_items_json(norm_items),
     )
-    obj.profit = _compute_profit(norm_items, db)
     db.add(obj)
     db.flush()
     # Always deduct inventory at checkout, even for partial payments.
@@ -221,6 +303,14 @@ def get_transaction(transaction_id: int, db: Session = Depends(get_db)):
     t = db.query(Transaction).filter(Transaction.id == transaction_id).first()
     if not t:
         raise HTTPException(status_code=404, detail="Transaction not found")
+    # Auto-backfill legacy invoices that lack snapshot fields.
+    parsed = _parse_items_json(t.items_json or "[]")
+    if parsed and not _has_full_item_snapshot(parsed):
+        snap_items = _enrich_item_snapshots(parsed, db)
+        t.items_json = _items_json(snap_items)
+        db.add(t)
+        db.commit()
+        db.refresh(t)
     return _to_dict(t)
 
 
@@ -275,12 +365,7 @@ def update_transaction_payment(
     row.amount = new_amount
     db.add(row)
     new_paid = _recompute_payment_totals(db, transaction_id)
-    prev_paid = float(t.paid or 0.0)
     t.paid = max(0.0, float(new_paid or 0.0))
-
-    # Keep profit update deterministic when invoice lines were unchanged.
-    if abs(float(prev_paid or 0.0) - float(t.paid or 0.0)) > 1e-9:
-        t.profit = _compute_profit(_parse_items_json(t.items_json or "[]"), db)
     db.add(t)
     db.commit()
     db.refresh(t)
@@ -295,7 +380,7 @@ def update_transaction(transaction_id: int, payload: TransactionCreate, db: Sess
     prev_paid = float(t.paid or 0.0)
     total_amount, new_paid = _validate_payment_bounds(payload.total or 0.0, payload.paid or 0.0)
     payment_delta = new_paid - prev_paid
-    norm_items = _normalize_items(payload.items)
+    norm_items = _enrich_item_snapshots(_normalize_items(payload.items), db)
     prev_items = _parse_items_json(t.items_json or "[]")
     was_deducted = bool(t.inventory_deducted)
     # Keep inventory balanced when editing an existing invoice.
@@ -312,7 +397,6 @@ def update_transaction(transaction_id: int, payload: TransactionCreate, db: Sess
     t.paid = new_paid
     t.discount = payload.discount or 0.0
     t.items_json = _items_json(norm_items)
-    t.profit = _compute_profit(norm_items, db)
     _record_payment(
         db,
         transaction_id=transaction_id,

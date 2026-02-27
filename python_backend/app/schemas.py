@@ -164,6 +164,12 @@ class PurchaseOut(BaseModel):
 class TransactionItem(BaseModel):
     id: int
     quantity: int
+    name: Optional[str] = None
+    retail_price: Optional[float] = None
+    discount_pct: Optional[float] = None
+    extra_discount_pct: Optional[float] = None
+    trade_price: Optional[float] = None
+    unit_price: Optional[float] = None
 
 
 class TransactionCreate(BaseModel):

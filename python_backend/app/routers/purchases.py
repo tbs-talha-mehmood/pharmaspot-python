@@ -82,9 +82,11 @@ def _sync_purchase_item_pricing(prod: Product, item: PurchaseItem) -> None:
         except Exception:
             pass
     try:
-        trade_price = item.trade_price if item.trade_price is not None else item.price
-        trade_val = float(trade_price or 0.0)
-        prod.trade_price = trade_val
+        # Keep trade as pre-extra discount amount when available.
+        trade_val = item.trade_price
+        if trade_val is None:
+            trade_val = item.price
+        prod.trade_price = float(trade_val or 0.0)
     except Exception:
         pass
 

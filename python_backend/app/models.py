@@ -90,7 +90,6 @@ class Transaction(Base):
     discount = Column(Float, default=0.0)
     # Match purchases: allow large payloads on MySQL
     items_json = Column(MYSQL_LONGTEXT if MYSQL_LONGTEXT is not None else Text, default="[]")
-    profit = Column(Float, default=0.0)
     inventory_deducted = Column(Boolean, default=False)
 
 
