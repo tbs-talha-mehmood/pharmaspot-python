@@ -1,5 +1,4 @@
 from PyQt5 import QtWidgets, QtPrintSupport, QtCore, QtGui
-import base64
 from pathlib import Path
 from datetime import datetime
 from .ui_common import (
@@ -2100,10 +2099,21 @@ class POSView(QtWidgets.QWidget):
         paid_amount=None,
     ):
         printer = QtPrintSupport.QPrinter()
+        try:
+            printer.setPageSize(QtPrintSupport.QPrinter.A4)
+        except Exception:
+            pass
+        try:
+            printer.setOrientation(QtPrintSupport.QPrinter.Portrait)
+        except Exception:
+            pass
+        try:
+            printer.setFullPage(True)
+        except Exception:
+            pass
         dialog = QtPrintSupport.QPrintDialog(printer, self)
         if dialog.exec_() != QtWidgets.QDialog.Accepted:
             return
-        doc = QtGui.QTextDocument()
         cust_name = self.customer.currentText() or "Walk-in"
         try:
             s = self.api.settings_map() or {}
@@ -2113,18 +2123,15 @@ class POSView(QtWidgets.QWidget):
         business_name = settings.get("business_name", "PharmaSpot")
         receipt_footer = settings.get("receipt_footer", "Thank you for your purchase!")
         logo_path = settings.get("logo_path", "assets/images/logo.svg")
-        logo_data_uri = ""
+        logo_pix = QtGui.QPixmap()
         try:
             p = Path(logo_path)
             if not p.is_file():
                 p = Path.cwd() / logo_path
-            with p.open("rb") as f:
-                b64 = base64.b64encode(f.read()).decode("ascii")
-            ext = p.suffix.lower()
-            mime = "image/svg+xml" if ext == ".svg" else ("image/png" if ext == ".png" else "image/jpeg")
-            logo_data_uri = f"data:{mime};base64,{b64}"
+            if p.is_file():
+                logo_pix.load(str(p))
         except Exception:
-            logo_data_uri = ""
+            pass
 
         rows = []
         for it in items:
@@ -2144,45 +2151,253 @@ class POSView(QtWidgets.QWidget):
                         trade = retail * (1.0 - (pct / 100.0))
                         final_price = trade * (1.0 - (extra / 100.0))
                         break
+                line_total = final_price * qty
                 rows.append(
-                    f"<tr><td>{name}</td><td style='text-align:center'>{qty}</td>"
-                    f"<td style='text-align:right'>{final_price:.2f}</td></tr>"
+                    {
+                        "name": str(name),
+                        "qty": qty,
+                        "unit_price": final_price,
+                        "line_total": line_total,
+                    }
                 )
             except Exception:
                 pass
+        if not rows:
+            rows.append({"name": "No items", "qty": 0, "unit_price": 0.0, "line_total": 0.0, "empty": True})
 
         now = QtCore.QDateTime.currentDateTime().toString("dd-MM-yyyy hh:mm:ss")
-        logo_html = f"<img src='{logo_data_uri}' style='max-height:60px'/>" if logo_data_uri else ""
-        invoice_line = f"Invoice #: {int(invoice_number)}<br/>" if invoice_number else ""
+        invoice_ref = f"INV-{int(invoice_number):05d}" if invoice_number else "DRAFT"
         try:
             paid_val = float(total_with_vat if paid_amount is None else paid_amount)
         except Exception:
             paid_val = float(total_with_vat or 0.0)
         due_val = max(0.0, float(total_with_vat or 0.0) - paid_val)
-        html = f"""
-        <div style='text-align:center'>
-            {logo_html}
-            <div style='font-size:16px;font-weight:bold'>{business_name}</div>
-            <div style='font-size:12px'>Receipt</div>
-        </div>
-        <p>Date: {now}<br/>{invoice_line}Customer: {cust_name}</p>
-        <table width='100%' border='0' cellspacing='0' cellpadding='2'>
-        <tr><th align='left'>Item</th><th align='center'>Qty</th><th align='right'>Price</th></tr>
-        {''.join(rows)}
-        </table>
-        <hr/>
-        <p>
-            Gross: {gross:.2f}<br/>
-            Discount: {discount_pct:.2f}%<br/>
-            VAT: {vat_amount:.2f} ({vat_pct:.2f}%)<br/>
-            Total: {total_with_vat:.2f}<br/>
-            Paid: {paid_val:.2f}<br/>
-            <b>Due: {due_val:.2f}</b>
-        </p>
-        <div style='text-align:center;font-size:11px;margin-top:8px'>{receipt_footer}</div>
-        """
-        doc.setHtml(html)
-        doc.print_(printer)
+        discounted_subtotal = max(0.0, float(total_with_vat or 0.0) - float(vat_amount or 0.0))
+        discount_amount = max(0.0, float(gross or 0.0) - discounted_subtotal)
+        due_label = "Amount Due" if due_val > 0.0001 else "Paid in Full"
+        due_bg = QtGui.QColor("#0f172a" if due_val > 0.0001 else "#166534")
+        business_name = str(business_name or "PharmaSpot")
+        receipt_footer = str(receipt_footer or "Thank you for your purchase!")
+
+        painter = QtGui.QPainter()
+        if not painter.begin(printer):
+            QtWidgets.QMessageBox.critical(self, "Print Error", "Could not start printer drawing.")
+            return
+        try:
+            painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
+            painter.setRenderHint(QtGui.QPainter.TextAntialiasing, True)
+
+            page = printer.paperRect()
+            if page.isNull():
+                page = printer.pageRect()
+            if page.isNull():
+                page = QtCore.QRect(0, 0, 1240, 1754)
+
+            px_per_mm = max(1.0, float(page.width()) / 210.0)  # A4 width in mm
+            margin_px = int(px_per_mm * 8.0)  # fixed 8mm margin
+            x0 = page.left() + margin_px
+            y0 = page.top() + margin_px
+            content_w = page.width() - (margin_px * 2)
+            content_h = page.height() - (margin_px * 2)
+            bottom = y0 + content_h
+
+            line_pen = QtGui.QPen(QtGui.QColor("#E5E7EB"), 1)
+            soft_text = QtGui.QColor("#6B7280")
+            main_text = QtGui.QColor("#111827")
+
+            def font(size: int, bold: bool = False):
+                f = QtGui.QFont("Segoe UI", size)
+                f.setBold(bold)
+                return f
+
+            def wrapped_height(fnt: QtGui.QFont, text: str, width: int) -> int:
+                fm = QtGui.QFontMetrics(fnt)
+                rect = fm.boundingRect(0, 0, max(1, int(width)), 10000, QtCore.Qt.TextWordWrap, str(text))
+                return max(rect.height(), fm.height())
+
+            inner_pad = max(2, int(content_w * 0.002))
+            left = x0 + inner_pad
+            right = x0 + content_w - inner_pad
+            y = y0 + inner_pad
+            inner_w = right - left
+
+            # Header
+            left_w = int(inner_w * 0.64)
+            right_w = inner_w - left_w
+            logo_h = 0
+            if not logo_pix.isNull():
+                logo_target_h = 52
+                logo_target_w = int(left_w * 0.34)
+                scaled = logo_pix.scaled(
+                    logo_target_w,
+                    logo_target_h,
+                    QtCore.Qt.KeepAspectRatio,
+                    QtCore.Qt.SmoothTransformation,
+                )
+                painter.drawPixmap(left, y, scaled)
+                logo_h = scaled.height() + 8
+
+            painter.setPen(main_text)
+            painter.setFont(font(20, True))
+            business_h = wrapped_height(painter.font(), business_name, left_w)
+            painter.drawText(
+                QtCore.QRect(left, y + logo_h, left_w, business_h + 4),
+                QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop | QtCore.Qt.TextWordWrap,
+                business_name,
+            )
+
+            painter.setPen(soft_text)
+            painter.setFont(font(11))
+            painter.drawText(
+                QtCore.QRect(left, y + logo_h + business_h + 4, left_w, 24),
+                QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter,
+                "Sales Invoice",
+            )
+
+            meta_x = left + left_w
+            meta_label_w = int(right_w * 0.36)
+            meta_value_w = right_w - meta_label_w - 8
+            meta_rows = [
+                ("Invoice #", invoice_ref),
+                ("Date", now),
+                ("Customer", str(cust_name or "Walk-in")),
+            ]
+            line_h = 24
+            for i, (label, value) in enumerate(meta_rows):
+                ly = y + (i * line_h)
+                painter.setPen(soft_text)
+                painter.setFont(font(10))
+                painter.drawText(
+                    QtCore.QRect(meta_x, ly, meta_label_w, line_h),
+                    QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter,
+                    f"{label}:",
+                )
+                painter.setPen(main_text)
+                painter.setFont(font(11, True))
+                painter.drawText(
+                    QtCore.QRect(meta_x + meta_label_w + 8, ly, meta_value_w, line_h),
+                    QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter,
+                    str(value),
+                )
+
+            header_h = max(logo_h + business_h + 34, len(meta_rows) * line_h + 8)
+            y += header_h + 10
+            painter.setPen(line_pen)
+            painter.drawLine(left, y, right, y)
+            y += 10
+
+            # Items table
+            item_w = int(inner_w * 0.56)
+            qty_w = int(inner_w * 0.10)
+            unit_w = int(inner_w * 0.17)
+            line_w = inner_w - item_w - qty_w - unit_w
+            row_x = [left, left + item_w, left + item_w + qty_w, left + item_w + qty_w + unit_w, right]
+
+            painter.setPen(QtCore.Qt.NoPen)
+            painter.setBrush(QtGui.QColor("#F3F4F6"))
+            painter.drawRect(left, y, inner_w, 30)
+            painter.setBrush(QtCore.Qt.NoBrush)
+            painter.setPen(line_pen)
+            painter.drawRect(left, y, inner_w, 30)
+            painter.setPen(main_text)
+            painter.setFont(font(10, True))
+            painter.drawText(QtCore.QRect(row_x[0] + 6, y, item_w - 12, 30), QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter, "ITEM")
+            painter.drawText(QtCore.QRect(row_x[1] + 4, y, qty_w - 8, 30), QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter, "QTY")
+            painter.drawText(QtCore.QRect(row_x[2] + 4, y, unit_w - 8, 30), QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter, "UNIT PRICE")
+            painter.drawText(QtCore.QRect(row_x[3] + 4, y, line_w - 8, 30), QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter, "LINE TOTAL")
+            y += 30
+
+            painter.setFont(font(11))
+            for row in rows:
+                if row.get("empty"):
+                    row_h = 30
+                else:
+                    row_h = max(32, wrapped_height(painter.font(), str(row.get("name", "")), item_w - 12) + 10)
+
+                if y + row_h > bottom - 220:
+                    break
+
+                painter.setPen(line_pen)
+                painter.drawLine(left, y + row_h, right, y + row_h)
+                painter.setPen(main_text)
+                painter.drawText(
+                    QtCore.QRect(row_x[0] + 6, y + 4, item_w - 12, row_h - 8),
+                    QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter | QtCore.Qt.TextWordWrap,
+                    str(row.get("name", "")),
+                )
+                if not row.get("empty"):
+                    painter.drawText(
+                        QtCore.QRect(row_x[1] + 4, y, qty_w - 8, row_h),
+                        QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter,
+                        str(int(row.get("qty", 0) or 0)),
+                    )
+                    painter.drawText(
+                        QtCore.QRect(row_x[2] + 4, y, unit_w - 8, row_h),
+                        QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter,
+                        f"{float(row.get('unit_price', 0.0) or 0.0):.2f}",
+                    )
+                    painter.setFont(font(11, True))
+                    painter.drawText(
+                        QtCore.QRect(row_x[3] + 4, y, line_w - 8, row_h),
+                        QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter,
+                        f"{float(row.get('line_total', 0.0) or 0.0):.2f}",
+                    )
+                    painter.setFont(font(11))
+                y += row_h
+
+            # Summary
+            y += 12
+            sum_w = int(inner_w * 0.42)
+            sum_x = right - sum_w
+            k_w = int(sum_w * 0.62)
+            v_w = sum_w - k_w
+            summary_rows = [
+                (f"Gross:", f"{gross:.2f}", False),
+                (f"Discount ({discount_pct:.2f}%):", f"-{discount_amount:.2f}", False),
+                (f"VAT ({vat_pct:.2f}%):", f"+{vat_amount:.2f}", False),
+                ("Paid:", f"{paid_val:.2f}", True),
+            ]
+            painter.setFont(font(11))
+            for label, value, bold in summary_rows:
+                painter.setPen(soft_text if not bold else main_text)
+                painter.setFont(font(11, bold))
+                painter.drawText(QtCore.QRect(sum_x, y, k_w - 8, 24), QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter, label)
+                painter.setPen(main_text)
+                painter.drawText(QtCore.QRect(sum_x + k_w, y, v_w, 24), QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter, value)
+                y += 24
+
+            painter.setPen(QtGui.QPen(QtGui.QColor("#CBD5E1"), 1))
+            painter.drawLine(sum_x, y + 2, sum_x + sum_w, y + 2)
+            painter.setPen(main_text)
+            painter.setFont(font(13, True))
+            painter.drawText(QtCore.QRect(sum_x, y + 6, k_w - 8, 28), QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter, "Grand Total:")
+            painter.drawText(QtCore.QRect(sum_x + k_w, y + 6, v_w, 28), QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter, f"{total_with_vat:.2f}")
+            y += 44
+
+            # Due badge
+            badge_text = f"{due_label}: {due_val:.2f}"
+            painter.setFont(font(11, True))
+            fm = QtGui.QFontMetrics(painter.font())
+            badge_w = fm.horizontalAdvance(badge_text) + 26
+            badge_h = fm.height() + 10
+            badge_x = right - badge_w
+            painter.fillRect(QtCore.QRect(badge_x, y, badge_w, badge_h), due_bg)
+            painter.setPen(QtGui.QColor("#FFFFFF"))
+            painter.drawText(QtCore.QRect(badge_x, y, badge_w, badge_h), QtCore.Qt.AlignCenter, badge_text)
+            y += badge_h + 18
+
+            # Footer
+            painter.setPen(QtGui.QPen(QtGui.QColor("#CBD5E1"), 1, QtCore.Qt.DashLine))
+            painter.drawLine(left, y, right, y)
+            painter.setPen(soft_text)
+            painter.setFont(font(10))
+            painter.drawText(
+                QtCore.QRect(left, y + 8, inner_w, 28),
+                QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter,
+                receipt_footer,
+            )
+        finally:
+            painter.end()
 
     # ---------- User ----------
     def set_user(self, user: dict):
