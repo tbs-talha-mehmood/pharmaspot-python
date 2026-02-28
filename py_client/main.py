@@ -4,6 +4,7 @@ from pathlib import Path
 import threading
 import socket
 import time
+import traceback
 from contextlib import closing
 
 from PyQt5 import QtWidgets, QtCore, QtGui
@@ -11,6 +12,8 @@ import requests
 from api import ApiClient
 from app import PharmaApp
 from theme import apply_theme, prepare_theme
+
+_BACKEND_START_ERROR = None
 
 
 def find_open_port() -> int:
@@ -21,15 +24,37 @@ def find_open_port() -> int:
 
 
 def start_api_server(port: int):
+    global _BACKEND_START_ERROR
     os.environ.setdefault("APPNAME", "pharmaspot")
     # Start uvicorn in-process
     # Ensure repo root is on sys.path so 'python_backend' is importable
-    repo_root = Path(__file__).resolve().parents[1]
+    if getattr(sys, "frozen", False):
+        repo_root = Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
+    else:
+        repo_root = Path(__file__).resolve().parents[1]
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
-    import uvicorn
-    # Use package-qualified path so imports resolve regardless of CWD
-    uvicorn.run("python_backend.app.main:app", host="127.0.0.1", port=port, reload=False, workers=1)
+    try:
+        import uvicorn
+        # Use package-qualified path so imports resolve regardless of CWD
+        uvicorn.run(
+            "python_backend.app.main:app",
+            host="127.0.0.1",
+            port=port,
+            reload=False,
+            log_config=None,
+            access_log=False,
+        )
+    except Exception:
+        _BACKEND_START_ERROR = traceback.format_exc()
+        try:
+            if getattr(sys, "frozen", False):
+                log_path = Path(sys.executable).resolve().parent / "backend_startup.log"
+            else:
+                log_path = Path(__file__).resolve().parents[1] / "backend_startup.log"
+            log_path.write_text(_BACKEND_START_ERROR, encoding="utf-8")
+        except Exception:
+            pass
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -80,6 +105,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
 
 def main():
+    global _BACKEND_START_ERROR
     # If API_URL is provided, use an existing backend; otherwise start one in-process
     api_url = (os.environ.get("API_URL") or "").strip()
     if api_url:
@@ -94,12 +120,30 @@ def main():
         t.start()
 
         # Wait for server
+        server_ready = False
         for _ in range(40):
             try:
                 requests.get(api_url + "/", timeout=0.5)
+                server_ready = True
                 break
             except Exception:
+                if _BACKEND_START_ERROR:
+                    break
                 time.sleep(0.1)
+        if not server_ready and _BACKEND_START_ERROR:
+            prepare_theme()
+            app = QtWidgets.QApplication(sys.argv)
+            apply_theme(app)
+            QtWidgets.QMessageBox.critical(
+                None,
+                "Backend Startup Error",
+                (
+                    "PharmaSpot could not start its local API server.\n\n"
+                    "A detailed log has been written to backend_startup.log "
+                    "next to the executable."
+                ),
+            )
+            return
 
     prepare_theme()
     app = QtWidgets.QApplication(sys.argv)

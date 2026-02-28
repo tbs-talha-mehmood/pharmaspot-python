@@ -1,7 +1,8 @@
 import os
+import sys
 from pathlib import Path
 from typing import Optional, Dict, Any
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, declarative_base
 from urllib.parse import quote_plus
 try:
@@ -9,13 +10,20 @@ try:
     from dotenv import load_dotenv  # type: ignore
 
     try:
-        # Prefer python_backend/.env relative to this file
-        _ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
-        if _ENV_PATH.exists():
-            load_dotenv(dotenv_path=_ENV_PATH)
+        # In frozen builds, prefer external .env next to the executable.
+        # This avoids accidentally reading bundled build-time .env values.
+        if getattr(sys, "frozen", False):
+            _EXE_ENV_PATH = Path(sys.executable).resolve().parent / "python_backend" / ".env"
+            if _EXE_ENV_PATH.exists():
+                load_dotenv(dotenv_path=_EXE_ENV_PATH)
         else:
-            # Fallback to default search (current working directory)
-            load_dotenv()
+            # Prefer python_backend/.env relative to this file during development.
+            _ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
+            if _ENV_PATH.exists():
+                load_dotenv(dotenv_path=_ENV_PATH)
+            else:
+                # Fallback to default search (current working directory)
+                load_dotenv()
     except Exception:
         pass
 except Exception:
@@ -77,14 +85,17 @@ def _compute_db_url() -> Dict[str, Any]:
     # Highest priority: explicit DATABASE_URL
     url = os.environ.get("DATABASE_URL")
     if url:
-        return {"url": url, "connect_args": {}}
+        connect_args: Dict[str, Any] = {}
+        if str(url).lower().startswith("mysql"):
+            connect_args["connect_timeout"] = 3
+        return {"url": url, "connect_args": connect_args}
 
     # Next: MySQL via env vars
     engine_env = (os.environ.get("DB_ENGINE") or os.environ.get("DB_TYPE") or "").lower()
     if engine_env == "mysql" or os.environ.get("DB_HOST"):
         mysql_url = _build_mysql_url()
         if mysql_url:
-            return {"url": mysql_url, "connect_args": {}}
+            return {"url": mysql_url, "connect_args": {"connect_timeout": 3}}
 
     # Fallback: local SQLite
     return {
@@ -94,7 +105,37 @@ def _compute_db_url() -> Dict[str, Any]:
 
 
 cfg = _compute_db_url()
-engine = create_engine(cfg["url"], connect_args=cfg.get("connect_args", {}), pool_pre_ping=True)
+
+
+def _build_sqlite_cfg() -> Dict[str, Any]:
+    return {
+        "url": f"sqlite:///{DB_PATH}",
+        "connect_args": {"check_same_thread": False},
+    }
+
+
+def _create_engine_with_fallback(config: Dict[str, Any]):
+    eng = create_engine(config["url"], connect_args=config.get("connect_args", {}), pool_pre_ping=True)
+    try:
+        with eng.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        return eng
+    except Exception:
+        # If a non-SQLite DB fails to connect (e.g. unavailable MySQL), keep app usable.
+        if str(config.get("url", "")).lower().startswith("sqlite"):
+            raise
+        sqlite_cfg = _build_sqlite_cfg()
+        eng = create_engine(
+            sqlite_cfg["url"],
+            connect_args=sqlite_cfg.get("connect_args", {}),
+            pool_pre_ping=True,
+        )
+        with eng.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        return eng
+
+
+engine = _create_engine_with_fallback(cfg)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
