@@ -1,4 +1,15 @@
 from PyQt5 import QtWidgets
+from .ui_common import (
+    apply_form_layout,
+    apply_header_layout,
+    apply_page_layout,
+    configure_table,
+    fit_dialog_to_contents,
+    polish_controls,
+    set_accent,
+    set_danger,
+    set_secondary,
+)
 
 
 class CustomersView(QtWidgets.QWidget):
@@ -10,16 +21,16 @@ class CustomersView(QtWidgets.QWidget):
 
     def _build(self):
         layout = QtWidgets.QVBoxLayout(self)
+        apply_page_layout(layout)
         header = QtWidgets.QHBoxLayout()
-        title = QtWidgets.QLabel("Customers")
-        title.setObjectName("title")
-        header.addWidget(title)
+        apply_header_layout(header)
         self.chk_inactive = QtWidgets.QCheckBox("Show inactive")
-        self.btn_refresh = QtWidgets.QPushButton("Refresh")
         self.btn_add = QtWidgets.QPushButton("Add Customer")
         self.btn_edit = QtWidgets.QPushButton("Edit")
         self.btn_delete = QtWidgets.QPushButton("Delete")
-        header.addWidget(self.btn_refresh)
+        set_secondary(self.btn_edit)
+        set_accent(self.btn_add)
+        set_danger(self.btn_delete)
         header.addWidget(self.btn_add)
         header.addWidget(self.btn_edit)
         header.addWidget(self.btn_delete)
@@ -29,27 +40,27 @@ class CustomersView(QtWidgets.QWidget):
 
         self.table = QtWidgets.QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(["ID", "Name", "Phone", "Email", "Address"])
+        configure_table(self.table, stretch_last=False)
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)
         hdr.setSectionResizeMode(1, QtWidgets.QHeaderView.Stretch)
         hdr.setSectionResizeMode(2, QtWidgets.QHeaderView.Stretch)
         hdr.setSectionResizeMode(3, QtWidgets.QHeaderView.Stretch)
         hdr.setSectionResizeMode(4, QtWidgets.QHeaderView.Stretch)
-        self.table.verticalHeader().setVisible(False)
-        self.table.setAlternatingRowColors(True)
         layout.addWidget(self.table)
 
         pager = QtWidgets.QHBoxLayout()
         self.btn_prev = QtWidgets.QPushButton("Prev")
         self.btn_next = QtWidgets.QPushButton("Next")
+        set_secondary(self.btn_prev, self.btn_next)
         self.page_label = QtWidgets.QLabel("Page 1 / 1")
+        self.page_label.setObjectName("mutedLabel")
         pager.addWidget(self.btn_prev)
         pager.addWidget(self.btn_next)
         pager.addWidget(self.page_label)
         pager.addStretch(1)
         layout.addLayout(pager)
 
-        self.btn_refresh.clicked.connect(self.refresh)
         self.btn_add.clicked.connect(self.add_dialog)
         self.btn_edit.clicked.connect(self.edit_selected)
         self.btn_delete.clicked.connect(self.delete_selected)
@@ -58,6 +69,7 @@ class CustomersView(QtWidgets.QWidget):
         self.chk_inactive.stateChanged.connect(self._on_filter_changed)
         self._page = 1
         self._pages = 1
+        polish_controls(self)
 
     def refresh(self):
         try:
@@ -103,10 +115,15 @@ class CustomersView(QtWidgets.QWidget):
         d = QtWidgets.QDialog(self)
         d.setWindowTitle("Add Customer")
         form = QtWidgets.QFormLayout(d)
+        apply_form_layout(form)
         name = QtWidgets.QLineEdit()
+        name.setPlaceholderText("Customer name")
         phone = QtWidgets.QLineEdit()
+        phone.setPlaceholderText("Phone number")
         email = QtWidgets.QLineEdit()
+        email.setPlaceholderText("Email")
         address = QtWidgets.QLineEdit()
+        address.setPlaceholderText("Address")
         form.addRow("Name", name)
         form.addRow("Phone", phone)
         form.addRow("Email", email)
@@ -115,6 +132,8 @@ class CustomersView(QtWidgets.QWidget):
         form.addRow(btns)
         btns.accepted.connect(d.accept)
         btns.rejected.connect(d.reject)
+        polish_controls(d)
+        fit_dialog_to_contents(d, min_width=460, fixed=True)
         if d.exec_() == QtWidgets.QDialog.Accepted:
             payload = {
                 "name": name.text().strip(),
@@ -150,6 +169,7 @@ class CustomersView(QtWidgets.QWidget):
         d = QtWidgets.QDialog(self)
         d.setWindowTitle(title)
         form = QtWidgets.QFormLayout(d)
+        apply_form_layout(form)
         name = QtWidgets.QLineEdit()
         phone = QtWidgets.QLineEdit()
         email = QtWidgets.QLineEdit()
@@ -167,6 +187,8 @@ class CustomersView(QtWidgets.QWidget):
         form.addRow(btns)
         btns.accepted.connect(d.accept)
         btns.rejected.connect(d.reject)
+        polish_controls(d)
+        fit_dialog_to_contents(d, min_width=460, fixed=True)
         return d, name, phone, email, address
 
     def edit_selected(self):

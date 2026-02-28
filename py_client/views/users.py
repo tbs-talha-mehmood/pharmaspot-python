@@ -1,21 +1,33 @@
 from PyQt5 import QtWidgets
+from .ui_common import (
+    apply_form_layout,
+    apply_header_layout,
+    apply_page_layout,
+    configure_table,
+    fit_dialog_to_contents,
+    polish_controls,
+    set_accent,
+    set_secondary,
+)
 
 
 class UsersView(QtWidgets.QWidget):
-    def __init__(self, api):
+    def __init__(self, api, *, auto_refresh: bool = True):
         super().__init__()
         self.api = api
         self._build()
-        self.refresh()
+        if auto_refresh:
+            self.refresh()
 
     def _build(self):
         layout = QtWidgets.QVBoxLayout(self)
+        apply_page_layout(layout)
         header = QtWidgets.QHBoxLayout()
-        title = QtWidgets.QLabel("Users")
-        title.setObjectName("title")
-        header.addWidget(title)
+        apply_header_layout(header)
         self.btn_refresh = QtWidgets.QPushButton("Refresh")
         self.btn_add = QtWidgets.QPushButton("Add User")
+        set_secondary(self.btn_refresh)
+        set_accent(self.btn_add)
         header.addWidget(self.btn_refresh)
         header.addWidget(self.btn_add)
         header.addStretch(1)
@@ -23,12 +35,12 @@ class UsersView(QtWidgets.QWidget):
 
         self.table = QtWidgets.QTableWidget(0, 3)
         self.table.setHorizontalHeaderLabels(["ID", "Username", "Fullname"])
-        self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.setAlternatingRowColors(True)
+        configure_table(self.table)
         layout.addWidget(self.table)
 
         self.btn_refresh.clicked.connect(self.refresh)
         self.btn_add.clicked.connect(self.add_user_dialog)
+        polish_controls(self)
 
     def refresh(self):
         try:
@@ -49,8 +61,11 @@ class UsersView(QtWidgets.QWidget):
         d = QtWidgets.QDialog(self)
         d.setWindowTitle("Add User")
         form = QtWidgets.QFormLayout(d)
+        apply_form_layout(form)
         username = QtWidgets.QLineEdit()
+        username.setPlaceholderText("username")
         fullname = QtWidgets.QLineEdit()
+        fullname.setPlaceholderText("Full name")
         password = QtWidgets.QLineEdit(); password.setEchoMode(QtWidgets.QLineEdit.Password)
         p_products = QtWidgets.QCheckBox()
         p_transactions = QtWidgets.QCheckBox()
@@ -67,6 +82,8 @@ class UsersView(QtWidgets.QWidget):
         form.addRow(btns)
         btns.accepted.connect(d.accept)
         btns.rejected.connect(d.reject)
+        polish_controls(d)
+        fit_dialog_to_contents(d, min_width=420, fixed=True)
         if d.exec_() == QtWidgets.QDialog.Accepted:
             payload = {
                 "username": username.text().strip(),

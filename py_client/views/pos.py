@@ -2,13 +2,25 @@ from PyQt5 import QtWidgets, QtPrintSupport, QtCore, QtGui
 import base64
 from pathlib import Path
 from datetime import datetime
+from .ui_common import (
+    apply_form_layout,
+    apply_header_layout,
+    apply_page_layout,
+    configure_table,
+    dialog_screen_limits,
+    fit_dialog_to_contents,
+    polish_controls,
+    set_accent,
+    set_danger,
+    set_secondary,
+)
 
 
 class POSView(QtWidgets.QWidget):
-    """Point of Sale view — redesigned for speed and simplicity.
+    """Point of Sale view redesigned for speed and simplicity.
 
     Key improvements:
-    - Always‑visible search box with instant results (Enter to add)
+    - Always-visible search box with instant results (Enter to add)
     - Clean cart table: Item, Qty, Price, Line Total, Remove
     - Big checkout area with Subtotal, Discount %, VAT, Total
     - Clear Cart and keyboard shortcuts (F2 focus search, Del remove)
@@ -32,8 +44,7 @@ class POSView(QtWidgets.QWidget):
     # ---------- UI ----------
     def _build(self):
         root = QtWidgets.QVBoxLayout(self)
-        root.setContentsMargins(12, 12, 12, 12)
-        root.setSpacing(10)
+        apply_page_layout(root)
 
         # Top card: sale controls + quick search
         top_card = QtWidgets.QFrame()
@@ -44,25 +55,37 @@ class POSView(QtWidgets.QWidget):
 
         # Customer + invoice row
         top = QtWidgets.QHBoxLayout()
+        apply_header_layout(top)
         top.setSpacing(8)
         cust_lbl = QtWidgets.QLabel("Customer:")
         cust_lbl.setObjectName("mutedLabel")
         top.addWidget(cust_lbl)
         self.customer = QtWidgets.QComboBox()
+        self.customer.setObjectName("posCustomerField")
         self.customer.setMinimumWidth(300)
+        self.customer.setMinimumHeight(36)
         self.customer.setEditable(True)
         self.customer.setInsertPolicy(QtWidgets.QComboBox.NoInsert)
         self.customer.setMaxVisibleItems(20)
         cust_line = self.customer.lineEdit()
         if cust_line is not None:
+            cust_line.setObjectName("posCustomerInput")
             cust_line.setPlaceholderText("Type to search customer...")
             cust_line.returnPressed.connect(self._select_customer_by_typed_text)
+        try:
+            self.customer.view().setObjectName("searchResultsPopup")
+        except Exception:
+            pass
         comp = self.customer.completer()
         if comp is not None:
             comp.setCaseSensitivity(QtCore.Qt.CaseInsensitive)
             comp.setCompletionMode(QtWidgets.QCompleter.PopupCompletion)
             try:
                 comp.setFilterMode(QtCore.Qt.MatchContains)
+            except Exception:
+                pass
+            try:
+                comp.popup().setObjectName("searchResultsPopup")
             except Exception:
                 pass
         top.addWidget(self.customer)
@@ -74,16 +97,17 @@ class POSView(QtWidgets.QWidget):
         self.invoice_no.setObjectName("invoiceInput")
         self.invoice_no.setPlaceholderText("e.g. 1001")
         self.invoice_no.setMinimumWidth(190)
+        self.invoice_no.setMinimumHeight(36)
         self.invoice_no.textChanged.connect(lambda _t: self._update_payment_history_visibility())
         self.invoice_no.returnPressed.connect(self._reopen_invoice_by_number)
         top.addWidget(self.invoice_no)
         self.payment_history_btn = QtWidgets.QPushButton("Payments")
-        self.payment_history_btn.setProperty("secondary", True)
+        set_secondary(self.payment_history_btn)
         self.payment_history_btn.clicked.connect(self._show_invoice_payments)
         self.payment_history_btn.setVisible(False)
         top.addWidget(self.payment_history_btn)
         self.cancel_invoice_edit_btn = QtWidgets.QPushButton("Cancel Edit")
-        self.cancel_invoice_edit_btn.setProperty("danger", True)
+        set_danger(self.cancel_invoice_edit_btn)
         self.cancel_invoice_edit_btn.clicked.connect(self._cancel_invoice_edit)
         self.cancel_invoice_edit_btn.setVisible(False)
         top.addWidget(self.cancel_invoice_edit_btn)
@@ -91,65 +115,75 @@ class POSView(QtWidgets.QWidget):
 
         # Search row
         search_row = QtWidgets.QHBoxLayout()
+        apply_header_layout(search_row)
         search_row.setSpacing(8)
         self.search = QtWidgets.QLineEdit()
-        self.search.setPlaceholderText("Type to search products...")
+        self.search.setObjectName("mainSearchInput")
+        self.search.setPlaceholderText("Search product by name, company, or ID...")
+        self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self._on_search_changed)
         self.search.returnPressed.connect(self._add_first_search_result)
-        self.search.setMinimumHeight(34)
+        self.search.setMinimumHeight(40)
         search_row.addWidget(self.search, 1)
-        self.refresh_btn = QtWidgets.QPushButton("Refresh")
-        self.refresh_btn.setProperty("secondary", True)
-        self.refresh_btn.setMinimumWidth(96)
-        self.refresh_btn.clicked.connect(self._load_products_cache)
-        search_row.addWidget(self.refresh_btn)
         top_wrap.addLayout(search_row)
         root.addWidget(top_card)
 
         # Search results list (inline, collapsible)
-        self.results = QtWidgets.QListWidget()
+        self.results = QtWidgets.QListWidget(self)
+        self.results.setObjectName("searchResultsPopup")
         self.results.setVisible(False)
-        self.results.setMaximumHeight(160)
+        self.results.setMaximumHeight(260)
+        self.results.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         self.results.itemActivated.connect(self._on_result_activate)
-        root.addWidget(self.results)
+        self.results.installEventFilter(self)
 
         # Cart table (match Purchases columns)
         self.table = QtWidgets.QTableWidget(0, 7)
+        self.table.setObjectName("posCartTable")
         self.table.setHorizontalHeaderLabels([
             "Product", "Retail", "% Discount", "Trade", "Addl %", "Qty", "Line Total",
         ])
-        self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.Stretch)
-        for col in (1, 2, 3, 4, 5, 6):
-            self.table.horizontalHeader().setSectionResizeMode(col, QtWidgets.QHeaderView.ResizeToContents)
-        self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
-        self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
-        self.table.setAlternatingRowColors(True)
-        self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(34)
+        configure_table(self.table, stretch_last=False)
+        self.table.verticalHeader().setDefaultSectionSize(40)
+        table_font = self.table.font()
+        table_font.setPointSize(max(10, table_font.pointSize()))
+        self.table.setFont(table_font)
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QtWidgets.QHeaderView.Stretch)
+        col_widths = {
+            1: 132,  # Retail
+            2: 102,  # % Discount
+            3: 132,  # Trade
+            4: 102,  # Addl %
+            5: 92,   # Qty
+            6: 152,  # Line Total
+        }
+        for col, width in col_widths.items():
+            header.setSectionResizeMode(col, QtWidgets.QHeaderView.Fixed)
+            self.table.setColumnWidth(col, width)
         root.addWidget(self.table, 1)
 
         # Bottom: totals + actions
         bottom = QtWidgets.QHBoxLayout()
+        apply_header_layout(bottom)
         bottom.setSpacing(8)
         self.clear_btn = QtWidgets.QPushButton("Clear Cart")
-        self.clear_btn.setProperty("secondary", True)
+        self.clear_btn.setObjectName("posActionBtn")
+        set_secondary(self.clear_btn)
         self.clear_btn.clicked.connect(self._clear_cart)
         bottom.addWidget(self.clear_btn)
         self.hold_btn = QtWidgets.QPushButton("Hold Sale")
-        self.hold_btn.setProperty("secondary", True)
+        self.hold_btn.setObjectName("posActionBtn")
+        set_secondary(self.hold_btn)
         self.hold_btn.clicked.connect(self._hold_sale)
         bottom.addWidget(self.hold_btn)
         self.resume_btn = QtWidgets.QPushButton("Resume Sale")
-        self.resume_btn.setProperty("secondary", True)
+        self.resume_btn.setObjectName("posActionBtn")
+        set_secondary(self.resume_btn)
         self.resume_btn.clicked.connect(self._resume_sale)
         bottom.addWidget(self.resume_btn)
         bottom.addStretch(1)
 
-        discount_box = QtWidgets.QGroupBox("Sale")
-        discount_box.setObjectName("totalsCard")
-        discount_box.setMinimumWidth(200)
-        discount_layout = QtWidgets.QFormLayout(discount_box)
         self.discount = QtWidgets.QDoubleSpinBox()
         self.discount.setRange(0, 100)
         self.discount.setDecimals(2)
@@ -163,13 +197,22 @@ class POSView(QtWidgets.QWidget):
             discount_le = None
         if discount_le is not None:
             discount_le.installEventFilter(self)
-        discount_layout.addRow("Discount %:", self.discount)
-        bottom.addWidget(discount_box)
+
+        sale_box = QtWidgets.QGroupBox("Sale")
+        sale_box.setObjectName("totalsCard")
+        sale_box.setMinimumWidth(260)
+        sale_layout = QtWidgets.QGridLayout(sale_box)
+        sale_layout.setContentsMargins(10, 8, 10, 8)
+        sale_layout.setHorizontalSpacing(10)
+        sale_layout.setVerticalSpacing(6)
+        sale_layout.setColumnStretch(1, 1)
 
         totals_box = QtWidgets.QGroupBox("Totals")
         totals_box.setObjectName("totalsCard")
-        totals_box.setMinimumWidth(260)
+        totals_box.setMinimumWidth(250)
         totals_layout = QtWidgets.QFormLayout(totals_box)
+        apply_form_layout(totals_layout)
+        totals_layout.setVerticalSpacing(4)
         self.subtotal_label = QtWidgets.QLabel("0.00")
         self.vat_label = QtWidgets.QLabel("0.00")
         self.total_label = QtWidgets.QLabel("0.00")
@@ -193,28 +236,47 @@ class POSView(QtWidgets.QWidget):
         self.paid_total_key_label = QtWidgets.QLabel("Paid Total:")
         self.paid_total_value_label = QtWidgets.QLabel("0.00")
         self.due_label = QtWidgets.QLabel("0.00")
+        self.discount_key_label = QtWidgets.QLabel("Discount %:")
+        for key_lbl in (
+            self.discount_key_label,
+            self.paid_input_label,
+            self.paid_prior_key_label,
+            self.paid_total_key_label,
+        ):
+            key_lbl.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Preferred)
         font_bold = self.total_label.font()
         font_bold.setPointSize(font_bold.pointSize() + 1)
         font_bold.setBold(True)
         self.total_label.setFont(font_bold)
+        self.discount.setMinimumHeight(28)
+        self.paid_spin.setMinimumHeight(28)
+        sale_layout.addWidget(self.discount_key_label, 0, 0)
+        sale_layout.addWidget(self.discount, 0, 1)
+        sale_layout.addWidget(self.paid_input_label, 1, 0)
+        sale_layout.addWidget(self.paid_spin, 1, 1)
+        sale_layout.addWidget(self.paid_prior_key_label, 2, 0)
+        sale_layout.addWidget(self.paid_prior_value_label, 2, 1)
+        sale_layout.addWidget(self.paid_total_key_label, 3, 0)
+        sale_layout.addWidget(self.paid_total_value_label, 3, 1)
+
         totals_layout.addRow("Subtotal:", self.subtotal_label)
         totals_layout.addRow("VAT:", self.vat_label)
         totals_layout.addRow("Total:", self.total_label)
-        totals_layout.addRow(self.paid_input_label, self.paid_spin)
-        totals_layout.addRow(self.paid_prior_key_label, self.paid_prior_value_label)
-        totals_layout.addRow(self.paid_total_key_label, self.paid_total_value_label)
         totals_layout.addRow("Due:", self.due_label)
         self.paid_prior_key_label.setVisible(False)
         self.paid_prior_value_label.setVisible(False)
         self.paid_total_key_label.setVisible(False)
         self.paid_total_value_label.setVisible(False)
+        bottom.addWidget(sale_box)
         bottom.addWidget(totals_box)
 
         self.checkout_btn = QtWidgets.QPushButton("Checkout")
         self.checkout_btn.setObjectName("checkoutBtn")
-        self.checkout_btn.setStyleSheet("padding: 8px 18px; font-size: 14px; font-weight: 600;")
+        set_accent(self.checkout_btn)
         self.checkout_btn.clicked.connect(self.checkout)
-        bottom.addWidget(self.checkout_btn)
+        bottom.addWidget(self.checkout_btn, 0, QtCore.Qt.AlignBottom)
+        self._sync_sale_label_widths()
+        self._sync_checkout_button_caption()
         root.addLayout(bottom)
 
         # Shortcuts
@@ -226,6 +288,7 @@ class POSView(QtWidgets.QWidget):
         # Keyboard-only navigation helpers
         self.search.installEventFilter(self)
         self.table.installEventFilter(self)
+        polish_controls(self)
 
     # ---------- Data loads ----------
     def _load_products_cache(self):
@@ -245,6 +308,18 @@ class POSView(QtWidgets.QWidget):
         except Exception:
             self.vat_percent = 0.0
         self._recalc_totals()
+
+    def refresh(self):
+        # Called when user enters POS from sidebar.
+        try:
+            self.products_cache = self.api.products() or []
+        except Exception:
+            self.products_cache = []
+        try:
+            self._load_customers()
+        except Exception:
+            pass
+        self._on_search_changed(self.search.text())
 
     def _load_customers(self):
         prev_id = 0
@@ -306,13 +381,14 @@ class POSView(QtWidgets.QWidget):
             self._edit_existing_paid = max(0.0, float(existing_paid or 0.0))
         except Exception:
             self._edit_existing_paid = 0.0
-        self.checkout_btn.setText(f"Update Invoice #{self._edit_transaction_id}")
+        self._sync_checkout_button_caption()
         self.cancel_invoice_edit_btn.setVisible(True)
         self.paid_input_label.setText("Add Payment:")
         self.paid_prior_key_label.setVisible(True)
         self.paid_prior_value_label.setVisible(True)
         self.paid_total_key_label.setVisible(True)
         self.paid_total_value_label.setVisible(True)
+        self._sync_sale_label_widths()
         self.paid_spin.setValue(0.0)
         self._recalc_totals()
         self._update_payment_history_visibility()
@@ -321,15 +397,47 @@ class POSView(QtWidgets.QWidget):
         self._edit_transaction_id = None
         self._edit_original_qty_by_product = {}
         self._edit_existing_paid = 0.0
-        self.checkout_btn.setText("Checkout")
+        self._sync_checkout_button_caption()
         self.cancel_invoice_edit_btn.setVisible(False)
         self.paid_input_label.setText("Paid:")
         self.paid_prior_key_label.setVisible(False)
         self.paid_prior_value_label.setVisible(False)
         self.paid_total_key_label.setVisible(False)
         self.paid_total_value_label.setVisible(False)
+        self._sync_sale_label_widths()
         self.invoice_no.clear()
         self._update_payment_history_visibility()
+
+    def _sync_sale_label_widths(self):
+        labels = [
+            self.discount_key_label,
+            self.paid_input_label,
+            self.paid_prior_key_label,
+            self.paid_total_key_label,
+        ]
+        visible = [lbl for lbl in labels if not lbl.isHidden()]
+        if not visible:
+            return
+        needed = max(lbl.fontMetrics().horizontalAdvance(lbl.text()) for lbl in visible) + 10
+        target_width = max(80, min(156, needed))
+        for lbl in labels:
+            lbl.setMinimumWidth(target_width)
+
+    def _sync_checkout_button_caption(self):
+        fm = self.checkout_btn.fontMetrics()
+        if self._edit_transaction_id is None:
+            text = "Checkout"
+            self.checkout_btn.setText(text)
+            self.checkout_btn.setToolTip("")
+            self.checkout_btn.setMinimumWidth(max(136, fm.horizontalAdvance(text) + 40))
+            return
+
+        full_text = f"Update Invoice #{self._edit_transaction_id}"
+        # Keep a compact caption to avoid clipping in non-maximized windows.
+        text = "Update Invoice"
+        self.checkout_btn.setText(text)
+        self.checkout_btn.setToolTip(full_text)
+        self.checkout_btn.setMinimumWidth(max(136, fm.horizontalAdvance(text) + 40))
 
     def _cancel_invoice_edit(self):
         if self._edit_transaction_id is None:
@@ -372,7 +480,49 @@ class POSView(QtWidgets.QWidget):
             except Exception:
                 pass
 
+    def _position_results_popup(self):
+        if self.results.count() <= 0:
+            return
+        row_h = self.results.sizeHintForRow(0)
+        if row_h <= 0:
+            row_h = 26
+        visible_rows = min(max(1, self.results.count()), 8)
+        popup_h = min(visible_rows * row_h + 8, 260)
+        top_left = self.search.mapTo(self, QtCore.QPoint(0, self.search.height() + 4))
+        popup_w = self.search.width()
+
+        # Keep the popup within this view's vertical bounds.
+        bottom_space = self.height() - top_left.y() - 10
+        if bottom_space < popup_h:
+            above_y = self.search.mapTo(self, QtCore.QPoint(0, -popup_h - 4)).y()
+            if above_y >= 6:
+                top_left.setY(above_y)
+            else:
+                popup_h = max(90, bottom_space)
+        self.results.setGeometry(top_left.x(), top_left.y(), popup_w, popup_h)
+        self.results.raise_()
+
+    def _show_results_popup(self):
+        if self.results.count() <= 0:
+            self._hide_results_popup()
+            return
+        self._position_results_popup()
+        self.results.show()
+        self.results.raise_()
+
+    def _hide_results_popup(self):
+        if self.results.isVisible():
+            self.results.hide()
+
     def eventFilter(self, obj, event):
+        if obj is self.search and event.type() == QtCore.QEvent.FocusOut:
+            QtCore.QTimer.singleShot(120, self._hide_results_popup)
+        if obj is self.table and event.type() == QtCore.QEvent.MouseButtonPress:
+            self._hide_results_popup()
+        if obj is self.results and event.type() == QtCore.QEvent.KeyPress:
+            if event.key() == QtCore.Qt.Key_Escape:
+                self._hide_results_popup()
+                return True
         if event.type() == QtCore.QEvent.KeyPress:
             key = event.key()
             shift_enter = bool(event.modifiers() & QtCore.Qt.ShiftModifier) and key in (
@@ -411,6 +561,15 @@ class POSView(QtWidgets.QWidget):
                 if shift_enter:
                     self._focus_discount_input()
                     return True
+                if key == QtCore.Qt.Key_Delete:
+                    self._remove_selected_row()
+                    return True
+                if key == QtCore.Qt.Key_Up:
+                    self._move_cart_row(-1)
+                    return True
+                if key == QtCore.Qt.Key_Down:
+                    self._move_cart_row(1)
+                    return True
                 if key in (QtCore.Qt.Key_Return, QtCore.Qt.Key_Enter):
                     self._focus_next_cart_field()
                     return True
@@ -432,6 +591,9 @@ class POSView(QtWidgets.QWidget):
                 row, col = self._cart_widget_position(obj)
                 if row is not None and col is not None:
                     self.table.setCurrentCell(row, col)
+                    if key == QtCore.Qt.Key_Delete:
+                        self._remove_row(row)
+                        return True
                     if shift_enter:
                         self._focus_discount_input()
                         return True
@@ -441,10 +603,23 @@ class POSView(QtWidgets.QWidget):
                     if key == QtCore.Qt.Key_Right:
                         self._focus_next_cart_field()
                         return True
+                    if key == QtCore.Qt.Key_Up:
+                        self._move_cart_row(-1, col)
+                        return True
+                    if key == QtCore.Qt.Key_Down:
+                        self._move_cart_row(1, col)
+                        return True
                     if key in (QtCore.Qt.Key_Return, QtCore.Qt.Key_Enter):
                         self._focus_next_cart_field()
                         return True
         return super().eventFilter(obj, event)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self.results.isVisible():
+            self._position_results_popup()
+        self._sync_sale_label_widths()
+        self._sync_checkout_button_caption()
 
     def _on_search_changed(self, text: str):
         text_raw = (text or "").strip()
@@ -457,7 +632,7 @@ class POSView(QtWidgets.QWidget):
             except Exception:
                 self.products_cache = []
         if not text_l:
-            self.results.setVisible(False)
+            self._hide_results_popup()
             return
         count = 0
         is_digits = text_raw.isdigit()
@@ -480,9 +655,11 @@ class POSView(QtWidgets.QWidget):
                         break
             except Exception:
                 pass
-        self.results.setVisible(self.results.count() > 0)
         if self.results.count() > 0:
             self.results.setCurrentRow(0)
+            self._show_results_popup()
+        else:
+            self._hide_results_popup()
 
     def _add_first_search_result(self):
         item = self.results.currentItem() if self.results.isVisible() else None
@@ -499,7 +676,7 @@ class POSView(QtWidgets.QWidget):
             return
         row = self._add_product_to_cart(prod)
         self.search.clear()
-        self.results.setVisible(False)
+        self._hide_results_popup()
         if row is not None:
             self._focus_cart_cell(row, 2)
 
@@ -593,39 +770,150 @@ class POSView(QtWidgets.QWidget):
             QtWidgets.QMessageBox.information(self, "No history", "No purchases found for this product.")
             return
         rows.sort(key=lambda r: r.get("date", ""), reverse=True)
+        screen = QtWidgets.QApplication.primaryScreen()
+        if screen:
+            geo = screen.availableGeometry()
+            max_dlg_w = int(geo.width() * 0.92)
+            max_dlg_h = int(geo.height() * 0.90)
+        else:
+            max_dlg_w = 1180
+            max_dlg_h = 760
+
+        row_h = 32
+        header_h = 34
+        chrome_h = 180  # title + optional note + buttons + margins
+        max_rows_fit = max(1, int((max_dlg_h - chrome_h - header_h) / max(1, row_h)))
+        visible_rows = rows[:max_rows_fit]
+        hidden_count = max(0, len(rows) - len(visible_rows))
+
+        def _date_only_text(raw_value):
+            dt = str(raw_value or "").strip()
+            if not dt:
+                return ""
+            try:
+                parsed = datetime.fromisoformat(dt.replace("Z", "+00:00"))
+                return parsed.strftime("%d-%m-%Y")
+            except Exception:
+                normalized = dt.replace("T", " ")
+                parts = normalized.split()
+                date_txt = parts[0] if parts else normalized
+                try:
+                    return datetime.strptime(date_txt, "%Y-%m-%d").strftime("%d-%m-%Y")
+                except Exception:
+                    return date_txt
+
         dlg = QtWidgets.QDialog(self)
         dlg.setWindowTitle(f"Purchases for {name}")
         v = QtWidgets.QVBoxLayout(dlg)
+        v.setContentsMargins(10, 10, 10, 10)
+        v.setSpacing(8)
         v.addWidget(QtWidgets.QLabel(f"Recent purchases for {name}"))
-        table = QtWidgets.QTableWidget(len(rows), 8)
+        table = QtWidgets.QTableWidget(len(visible_rows), 8)
         table.setHorizontalHeaderLabels(
             ["Date", "Supplier", "Qty", "Retail", "Trade", "%Disc", "Addl %", "Line Total"]
         )
-        table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
-        table.setAlternatingRowColors(True)
-        for r_idx, row in enumerate(rows):
-            table.setItem(r_idx, 0, QtWidgets.QTableWidgetItem(str(row["date"])))
-            table.setItem(r_idx, 1, QtWidgets.QTableWidgetItem(str(row["supplier"])))
-            table.setItem(r_idx, 2, QtWidgets.QTableWidgetItem(str(row["qty"])))
-            table.setItem(r_idx, 3, QtWidgets.QTableWidgetItem(f"{row['retail']:.2f}"))
-            table.setItem(r_idx, 4, QtWidgets.QTableWidgetItem(f"{row['trade']:.2f}"))
+        configure_table(table, stretch_last=False)
+        table.verticalHeader().setDefaultSectionSize(row_h)
+        table.setWordWrap(False)
+        table.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        table.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        hdr = table.horizontalHeader()
+        for col in range(8):
+            hdr.setSectionResizeMode(col, QtWidgets.QHeaderView.Fixed)
+
+        supplier_texts = []
+        for r_idx, row in enumerate(visible_rows):
+            date_item = QtWidgets.QTableWidgetItem(_date_only_text(row["date"]))
+            supplier_txt = str(row["supplier"])
+            supplier_texts.append(supplier_txt)
+            supplier_item = QtWidgets.QTableWidgetItem(supplier_txt)
+            qty_item = QtWidgets.QTableWidgetItem(str(row["qty"]))
+            retail_item = QtWidgets.QTableWidgetItem(f"{row['retail']:.2f}")
+            trade_item = QtWidgets.QTableWidgetItem(f"{row['trade']:.2f}")
             disc_val = "" if row["disc"] is None else f"{row['disc']:.2f}"
             extra_val = "" if row["extra"] is None else f"{row['extra']:.2f}"
-            table.setItem(r_idx, 5, QtWidgets.QTableWidgetItem(disc_val))
-            table.setItem(r_idx, 6, QtWidgets.QTableWidgetItem(extra_val))
-            table.setItem(r_idx, 7, QtWidgets.QTableWidgetItem(f"{row['final'] * row['qty']:.2f}"))
-        table.resizeRowsToContents()
+            disc_item = QtWidgets.QTableWidgetItem(disc_val)
+            extra_item = QtWidgets.QTableWidgetItem(extra_val)
+            line_total_item = QtWidgets.QTableWidgetItem(f"{row['final'] * row['qty']:.2f}")
+
+            date_item.setTextAlignment(QtCore.Qt.AlignCenter)
+            qty_item.setTextAlignment(QtCore.Qt.AlignCenter)
+            retail_item.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
+            trade_item.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
+            disc_item.setTextAlignment(QtCore.Qt.AlignCenter)
+            extra_item.setTextAlignment(QtCore.Qt.AlignCenter)
+            line_total_item.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
+
+            table.setItem(r_idx, 0, date_item)
+            table.setItem(r_idx, 1, supplier_item)
+            table.setItem(r_idx, 2, qty_item)
+            table.setItem(r_idx, 3, retail_item)
+            table.setItem(r_idx, 4, trade_item)
+            table.setItem(r_idx, 5, disc_item)
+            table.setItem(r_idx, 6, extra_item)
+            table.setItem(r_idx, 7, line_total_item)
+
+        fm = table.fontMetrics()
+        supplier_pref = fm.horizontalAdvance("Supplier") + 28
+        for txt in supplier_texts:
+            supplier_pref = max(supplier_pref, fm.horizontalAdvance(txt) + 30)
+        supplier_pref = min(420, supplier_pref)
+        pref_widths = {
+            0: 106,
+            1: supplier_pref,
+            2: 58,
+            3: 96,
+            4: 96,
+            5: 70,
+            6: 70,
+            7: 112,
+        }
+        min_widths = {
+            0: 92,
+            1: 150,
+            2: 50,
+            3: 82,
+            4: 82,
+            5: 60,
+            6: 60,
+            7: 94,
+        }
+        widths = dict(pref_widths)
+        table_frame = table.frameWidth() * 2 + 2
+        available_table_w = max(520, max_dlg_w - 24 - table_frame)
+        overflow = max(0, sum(widths.values()) - available_table_w)
+        if overflow > 0:
+            supplier_cut = min(overflow, widths[1] - min_widths[1])
+            widths[1] -= supplier_cut
+            overflow -= supplier_cut
+            for col in (0, 3, 4, 7, 5, 6, 2):
+                if overflow <= 0:
+                    break
+                cut = min(overflow, widths[col] - min_widths[col])
+                widths[col] -= cut
+                overflow -= cut
+        for col, width in widths.items():
+            table.setColumnWidth(col, int(width))
+        table_w = sum(widths.values()) + table_frame
+        table_h = table.frameWidth() * 2 + table.horizontalHeader().height() + (table.rowCount() * row_h) + 2
+        table.setFixedSize(table_w, table_h)
         v.addWidget(table)
+        if hidden_count > 0:
+            info_lbl = QtWidgets.QLabel(
+                f"Showing latest {len(visible_rows)} of {len(rows)} purchases to fit the screen without scrolling."
+            )
+            info_lbl.setObjectName("mutedLabel")
+            v.addWidget(info_lbl)
         close_btn = QtWidgets.QPushButton("Close")
+        set_secondary(close_btn)
         close_btn.clicked.connect(dlg.accept)
         btn_row = QtWidgets.QHBoxLayout()
         btn_row.addStretch(1)
         btn_row.addWidget(close_btn)
         v.addLayout(btn_row)
-        screen = QtWidgets.QApplication.primaryScreen()
-        if screen:
-            geo = screen.availableGeometry()
-            dlg.resize(int(geo.width() * 0.92), int(geo.height() * 0.9))
+        polish_controls(dlg)
+        dlg.adjustSize()
+        dlg.setFixedSize(min(max_dlg_w, dlg.sizeHint().width()), min(max_dlg_h, dlg.sizeHint().height()))
         dlg.exec_()
 
     def _reopen_invoice_by_number(self):
@@ -671,17 +959,59 @@ class POSView(QtWidgets.QWidget):
         if inv is None:
             QtWidgets.QMessageBox.information(self, "Payments", "Reopen an invoice first.")
             return
+
+        screen = QtWidgets.QApplication.primaryScreen()
+        if screen:
+            geo = screen.availableGeometry()
+            max_dlg_w = int(geo.width() * 0.92)
+            max_dlg_h = int(geo.height() * 0.90)
+        else:
+            max_dlg_w = 980
+            max_dlg_h = 760
+        row_h = 32
+        chrome_h = 196
+        col_widths = {
+            0: 118,  # Date
+            1: 92,   # Time
+            2: 112,  # Amount
+            3: 112,  # Paid Total
+            4: 84,   # User ID
+        }
+
         dlg = QtWidgets.QDialog(self)
         dlg.setWindowTitle(f"Payments for Invoice #{inv}")
         v = QtWidgets.QVBoxLayout(dlg)
+        v.setContentsMargins(10, 10, 10, 10)
+        v.setSpacing(8)
         table = QtWidgets.QTableWidget(0, 6)
         table.setHorizontalHeaderLabels(["Date", "Time", "Amount", "Paid Total", "User ID", "Payment ID"])
         table.setColumnHidden(5, True)
-        table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
-        table.setAlternatingRowColors(True)
+        configure_table(table, stretch_last=False)
+        table.verticalHeader().setDefaultSectionSize(row_h)
+        table.setWordWrap(False)
+        table.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        table.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        hdr = table.horizontalHeader()
+        for col, width in col_widths.items():
+            hdr.setSectionResizeMode(col, QtWidgets.QHeaderView.Fixed)
+            table.setColumnWidth(col, width)
         v.addWidget(table)
         info = QtWidgets.QLabel("You can edit a payment amount and it will recalculate paid totals.")
+        info.setObjectName("mutedLabel")
         v.addWidget(info)
+        overflow_lbl = QtWidgets.QLabel("")
+        overflow_lbl.setObjectName("mutedLabel")
+        overflow_lbl.setVisible(False)
+        v.addWidget(overflow_lbl)
+        state = {"total_rows": 0}
+
+        def _fit_dialog():
+            table_frame = table.frameWidth() * 2 + 2
+            table_w = sum(col_widths.values()) + table_frame
+            table_h = table.frameWidth() * 2 + table.horizontalHeader().height() + (table.rowCount() * row_h) + 2
+            table.setFixedSize(table_w, table_h)
+            dlg.adjustSize()
+            dlg.setFixedSize(min(max_dlg_w, dlg.sizeHint().width()), min(max_dlg_h, dlg.sizeHint().height()))
 
         def _load_rows():
             try:
@@ -693,8 +1023,20 @@ class POSView(QtWidgets.QWidget):
                 detail = str(rows.get("detail", "") or "").strip()
                 QtWidgets.QMessageBox.information(self, "Payments", detail or "Could not load payment history.")
                 return False
+            rows = list(rows or [])
+            rows.sort(key=lambda row: str(row.get("date", "") or ""), reverse=True)
+            state["total_rows"] = len(rows)
             table.setRowCount(0)
-            for row in rows:
+            if not rows:
+                overflow_lbl.setVisible(False)
+                _fit_dialog()
+                return True
+
+            header_h = max(30, table.horizontalHeader().height())
+            max_rows_fit = max(1, int((max_dlg_h - chrome_h - header_h) / max(1, row_h)))
+            visible_rows = rows[:max_rows_fit]
+            hidden_count = max(0, len(rows) - len(visible_rows))
+            for row in visible_rows:
                 rr = table.rowCount()
                 table.insertRow(rr)
                 dt = str(row.get("date", "") or "").strip()
@@ -702,12 +1044,16 @@ class POSView(QtWidgets.QWidget):
                 if dt:
                     try:
                         parsed = datetime.fromisoformat(dt.replace("Z", "+00:00"))
-                        date_txt = parsed.strftime("%Y-%m-%d")
+                        date_txt = parsed.strftime("%d-%m-%Y")
                         time_txt = parsed.strftime("%H:%M:%S")
                     except Exception:
                         normalized = dt.replace("T", " ")
                         parts = normalized.split()
                         date_txt = parts[0] if parts else normalized
+                        try:
+                            date_txt = datetime.strptime(date_txt, "%Y-%m-%d").strftime("%d-%m-%Y")
+                        except Exception:
+                            pass
                         if len(parts) > 1:
                             time_txt = parts[1]
                             if "." in time_txt:
@@ -725,13 +1071,30 @@ class POSView(QtWidgets.QWidget):
                     paid_total = 0.0
                 uid = int(row.get("user_id", 0) or 0)
                 pid = int(row.get("id", 0) or 0)
-                table.setItem(rr, 0, QtWidgets.QTableWidgetItem(date_txt))
-                table.setItem(rr, 1, QtWidgets.QTableWidgetItem(time_txt))
-                table.setItem(rr, 2, QtWidgets.QTableWidgetItem(amt))
-                table.setItem(rr, 3, QtWidgets.QTableWidgetItem(f"{paid_total:.2f}"))
-                table.setItem(rr, 4, QtWidgets.QTableWidgetItem(str(uid)))
+                date_item = QtWidgets.QTableWidgetItem(date_txt)
+                time_item = QtWidgets.QTableWidgetItem(time_txt)
+                amount_item = QtWidgets.QTableWidgetItem(amt)
+                paid_total_item = QtWidgets.QTableWidgetItem(f"{paid_total:.2f}")
+                user_item = QtWidgets.QTableWidgetItem(str(uid))
+                date_item.setTextAlignment(QtCore.Qt.AlignCenter)
+                time_item.setTextAlignment(QtCore.Qt.AlignCenter)
+                amount_item.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
+                paid_total_item.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
+                user_item.setTextAlignment(QtCore.Qt.AlignCenter)
+                table.setItem(rr, 0, date_item)
+                table.setItem(rr, 1, time_item)
+                table.setItem(rr, 2, amount_item)
+                table.setItem(rr, 3, paid_total_item)
+                table.setItem(rr, 4, user_item)
                 table.setItem(rr, 5, QtWidgets.QTableWidgetItem(str(pid)))
-            table.resizeRowsToContents()
+            if hidden_count > 0:
+                overflow_lbl.setText(
+                    f"Showing latest {len(visible_rows)} of {len(rows)} payments to fit screen without scrolling."
+                )
+                overflow_lbl.setVisible(True)
+            else:
+                overflow_lbl.setVisible(False)
+            _fit_dialog()
             return True
 
         def _edit_selected():
@@ -782,7 +1145,7 @@ class POSView(QtWidgets.QWidget):
 
         if not _load_rows():
             return
-        if table.rowCount() <= 0:
+        if state["total_rows"] <= 0:
             QtWidgets.QMessageBox.information(self, "Payments", f"No payment entries for invoice #{inv}.")
             return
         close_btn = QtWidgets.QPushButton("Close")
@@ -791,16 +1154,15 @@ class POSView(QtWidgets.QWidget):
         edit_btn.clicked.connect(_edit_selected)
         refresh_btn = QtWidgets.QPushButton("Refresh")
         refresh_btn.clicked.connect(_load_rows)
+        set_secondary(edit_btn, refresh_btn, close_btn)
         row_btn = QtWidgets.QHBoxLayout()
         row_btn.addWidget(edit_btn)
         row_btn.addWidget(refresh_btn)
         row_btn.addStretch(1)
         row_btn.addWidget(close_btn)
         v.addLayout(row_btn)
-        screen = QtWidgets.QApplication.primaryScreen()
-        if screen:
-            geo = screen.availableGeometry()
-            dlg.resize(int(geo.width() * 0.92), int(geo.height() * 0.9))
+        polish_controls(dlg)
+        _fit_dialog()
         dlg.exec_()
 
     def _sync_payment_edit_state(self, invoice_id: int):
@@ -937,6 +1299,9 @@ class POSView(QtWidgets.QWidget):
         spin.setDecimals(2)
         spin.setValue(float(value))
         spin.setButtonSymbols(QtWidgets.QAbstractSpinBox.NoButtons)
+        spin.setObjectName("cartEditor")
+        spin.setAlignment(QtCore.Qt.AlignCenter)
+        spin.setMinimumHeight(34)
         return spin
 
     def _make_pct_spin(self, value):
@@ -945,6 +1310,9 @@ class POSView(QtWidgets.QWidget):
         spin.setDecimals(2)
         spin.setValue(float(value))
         spin.setButtonSymbols(QtWidgets.QAbstractSpinBox.NoButtons)
+        spin.setObjectName("cartEditor")
+        spin.setAlignment(QtCore.Qt.AlignCenter)
+        spin.setMinimumHeight(34)
         return spin
 
     def _make_qty_spin(self, value):
@@ -952,6 +1320,9 @@ class POSView(QtWidgets.QWidget):
         spin.setRange(1, 10**9)
         spin.setValue(int(value))
         spin.setButtonSymbols(QtWidgets.QAbstractSpinBox.NoButtons)
+        spin.setObjectName("cartEditor")
+        spin.setAlignment(QtCore.Qt.AlignCenter)
+        spin.setMinimumHeight(34)
         return spin
 
     def _add_product_to_cart(self, product: dict):
@@ -988,6 +1359,8 @@ class POSView(QtWidgets.QWidget):
         label = f"{name} ({company})" if company else name
         prod_item = QtWidgets.QTableWidgetItem(label)
         prod_item.setFlags(prod_item.flags() & ~QtCore.Qt.ItemIsEditable)
+        prod_item.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignLeft)
+        prod_item.setForeground(QtGui.QBrush(QtGui.QColor("#f5f9ff")))
         prod_item.setData(
             QtCore.Qt.UserRole,
             {
@@ -1034,6 +1407,8 @@ class POSView(QtWidgets.QWidget):
         pct_spin = self._make_pct_spin(pct_default or 0.0)
         trade_item = QtWidgets.QTableWidgetItem(f"{float(trade_default or retail):.2f}")
         trade_item.setFlags(trade_item.flags() & ~QtCore.Qt.ItemIsEditable)
+        trade_item.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
+        trade_item.setForeground(QtGui.QBrush(QtGui.QColor("#f2f7ff")))
         extra_spin = self._make_pct_spin(extra_default)
         qty_spin = self._make_qty_spin(1)
         self.table.setCellWidget(row, 2, pct_spin)
@@ -1044,6 +1419,8 @@ class POSView(QtWidgets.QWidget):
         # Line total
         line_total = QtWidgets.QTableWidgetItem("0.00")
         line_total.setFlags(line_total.flags() & ~QtCore.Qt.ItemIsEditable)
+        line_total.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
+        line_total.setForeground(QtGui.QBrush(QtGui.QColor("#f2f7ff")))
         self.table.setItem(row, 6, line_total)
 
         # Connect recalc triggers
@@ -1071,10 +1448,17 @@ class POSView(QtWidgets.QWidget):
     def _remove_row(self, row: int):
         if 0 <= row < self.table.rowCount():
             self.table.removeRow(row)
+            if self.table.rowCount() > 0:
+                next_row = min(row, self.table.rowCount() - 1)
+                self._focus_cart_cell(next_row, 2)
             self._recalc_totals()
 
     def _remove_selected_row(self):
         r = self.table.currentRow()
+        if r < 0:
+            focus_w = self.focusWidget()
+            focus_row, _ = self._cart_widget_position(focus_w)
+            r = focus_row if focus_row is not None else -1
         if r >= 0:
             self._remove_row(r)
 
@@ -1248,6 +1632,21 @@ class POSView(QtWidgets.QWidget):
                 except Exception:
                     pass
 
+    def _move_cart_row(self, delta: int, preferred_col: int | None = None):
+        """Move cart focus vertically without changing current field values."""
+        if self.table.rowCount() <= 0:
+            return
+        row = self.table.currentRow()
+        if row < 0:
+            row = 0
+        col = self.table.currentColumn()
+        if preferred_col is not None:
+            col = preferred_col
+        if col not in (2, 4, 5):
+            col = 2
+        new_row = max(0, min(self.table.rowCount() - 1, row + delta))
+        self._focus_cart_cell(new_row, col)
+
     def _focus_cart_from_search(self):
         """Jump from search box to an editable field in the active cart row."""
         if self.table.rowCount() <= 0:
@@ -1359,13 +1758,46 @@ class POSView(QtWidgets.QWidget):
             return
         snap = self._snapshot_cart()
         default_name = f"Hold {datetime.now().strftime('%H:%M:%S')}"
-        name, ok = QtWidgets.QInputDialog.getText(self, "Hold Sale", "Name this hold:", text=default_name)
-        if not ok:
+        name = self._prompt_hold_name(default_name)
+        if name is None:
             return
         snap["name"] = (name or "").strip() or default_name
         self.held_sales.append(snap)
         self._clear_cart()
         QtWidgets.QMessageBox.information(self, "Held", f"Sale held as \"{snap['name']}\".")
+
+    def _prompt_hold_name(self, default_name: str):
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle("Hold Sale")
+        v = QtWidgets.QVBoxLayout(dlg)
+        apply_page_layout(v)
+        prompt = QtWidgets.QLabel("Name this hold:")
+        name_edit = QtWidgets.QLineEdit()
+        name_edit.setPlaceholderText("Hold name")
+        name_edit.setText(default_name)
+        v.addWidget(prompt)
+        v.addWidget(name_edit)
+
+        btn_row = QtWidgets.QHBoxLayout()
+        btn_row.setContentsMargins(0, 0, 0, 0)
+        btn_row.setSpacing(8)
+        btn_row.addStretch(1)
+        cancel_btn = QtWidgets.QPushButton("Cancel")
+        save_btn = QtWidgets.QPushButton("Save Hold")
+        set_secondary(cancel_btn)
+        set_accent(save_btn)
+        cancel_btn.clicked.connect(dlg.reject)
+        save_btn.clicked.connect(dlg.accept)
+        name_edit.returnPressed.connect(dlg.accept)
+        btn_row.addWidget(cancel_btn)
+        btn_row.addWidget(save_btn)
+        v.addLayout(btn_row)
+        polish_controls(dlg)
+        fit_dialog_to_contents(dlg, min_width=420, fixed=True)
+        QtCore.QTimer.singleShot(0, lambda: (name_edit.setFocus(), name_edit.selectAll()))
+        if dlg.exec_() != QtWidgets.QDialog.Accepted:
+            return None
+        return name_edit.text()
 
     def _resume_sale(self):
         if self._edit_transaction_id is not None:
@@ -1380,24 +1812,76 @@ class POSView(QtWidgets.QWidget):
             return
         # Ensure product cache is fresh for stock checks
         self._load_products_cache()
+        max_dlg_w, max_dlg_h = dialog_screen_limits(width_ratio=0.90, height_ratio=0.82, fallback_width=960, fallback_height=700)
+
         dlg = QtWidgets.QDialog(self)
         dlg.setWindowTitle("Resume Sale")
         v = QtWidgets.QVBoxLayout(dlg)
+        v.setContentsMargins(10, 10, 10, 10)
+        v.setSpacing(8)
         listw = QtWidgets.QListWidget()
-        for idx, snap in enumerate(self.held_sales):
+        listw.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        listw.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        listw.setWordWrap(False)
+        listw.setUniformItemSizes(True)
+        rows = list(enumerate(self.held_sales))
+        rows.sort(key=lambda it: str((it[1] or {}).get("created", "")), reverse=True)
+        if not rows:
+            QtWidgets.QMessageBox.information(self, "None", "No held sales.")
+            return
+
+        row_h = 32
+        chrome_h = 170
+        max_rows_fit = max(1, int((max_dlg_h - chrome_h) / max(1, row_h)))
+        visible_rows = rows[:max_rows_fit]
+        hidden_count = max(0, len(rows) - len(visible_rows))
+        fm = listw.fontMetrics()
+        list_text_w = fm.horizontalAdvance("Resume Sale") + 24
+        for idx, snap in visible_rows:
             label = snap.get("name", f"Hold {idx+1}")
             ts = snap.get("created", "")
+            ts_display = ts
+            if ts:
+                try:
+                    parsed_ts = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+                    ts_display = parsed_ts.strftime("%d-%m-%Y %H:%M:%S")
+                except Exception:
+                    try:
+                        parsed_ts = datetime.strptime(str(ts), "%Y-%m-%d %H:%M:%S")
+                        ts_display = parsed_ts.strftime("%d-%m-%Y %H:%M:%S")
+                    except Exception:
+                        ts_display = str(ts)
             cnt = len(snap.get("items", []))
-            item = QtWidgets.QListWidgetItem(f"{label} ({cnt} items) {ts}")
+            text = f"{label} ({cnt} items) {ts_display}"
+            list_text_w = max(list_text_w, fm.horizontalAdvance(text) + 24)
+            item = QtWidgets.QListWidgetItem(text)
             item.setData(QtCore.Qt.UserRole, idx)
             listw.addItem(item)
         if listw.count() > 0:
             listw.setCurrentRow(0)
+        list_w = min(max_dlg_w - 24, max(420, list_text_w))
+        list_h = listw.frameWidth() * 2 + (listw.count() * row_h) + 4
+        listw.setFixedSize(list_w, list_h)
         v.addWidget(listw)
+        if hidden_count > 0:
+            overflow_lbl = QtWidgets.QLabel(
+                f"Showing latest {len(visible_rows)} of {len(rows)} held sales to fit screen without scrolling."
+            )
+            overflow_lbl.setObjectName("mutedLabel")
+            v.addWidget(overflow_lbl)
         btns = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+        ok_btn = btns.button(QtWidgets.QDialogButtonBox.Ok)
+        cancel_btn = btns.button(QtWidgets.QDialogButtonBox.Cancel)
+        if ok_btn is not None:
+            ok_btn.setText("Resume")
+            set_accent(ok_btn)
+        if cancel_btn is not None:
+            set_secondary(cancel_btn)
         btns.accepted.connect(dlg.accept)
         btns.rejected.connect(dlg.reject)
         v.addWidget(btns)
+        polish_controls(dlg)
+        fit_dialog_to_contents(dlg, min_width=min(max_dlg_w, list_w + 20), fixed=True, width_ratio=0.90, height_ratio=0.82)
         listw.itemActivated.connect(lambda _item: dlg.accept())
         listw.itemDoubleClicked.connect(lambda _item: dlg.accept())
         QtCore.QTimer.singleShot(0, lambda: listw.setFocus())
@@ -1430,6 +1914,14 @@ class POSView(QtWidgets.QWidget):
             QtWidgets.QApplication.processEvents()
 
     def _recalc_totals(self):
+        total_items = 0
+        for r in range(self.table.rowCount()):
+            try:
+                qty_w = self.table.cellWidget(r, 5)
+                total_items += int(qty_w.value()) if isinstance(qty_w, QtWidgets.QSpinBox) else 0
+            except Exception:
+                pass
+
         # Subtotal
         subtotal = 0.0
         for r in range(self.table.rowCount()):
@@ -1450,7 +1942,7 @@ class POSView(QtWidgets.QWidget):
         existing_paid = float(self._edit_existing_paid or 0.0) if self._edit_transaction_id is not None else 0.0
         paid_amount = existing_paid + payment_input
         due_amount = max(0.0, grand - paid_amount)
-        self.subtotal_label.setText(f"{subtotal:.2f}")
+        self.subtotal_label.setText(f"{subtotal:.2f} ({total_items} item{'s' if total_items != 1 else ''})")
         self.vat_label.setText(f"{vat_amount:.2f} ({self.vat_percent:.2f}%)")
         self.total_label.setText(f"{grand:.2f}")
         self.paid_prior_value_label.setText(f"{existing_paid:.2f}")
@@ -1659,7 +2151,7 @@ class POSView(QtWidgets.QWidget):
             except Exception:
                 pass
 
-        now = QtCore.QDateTime.currentDateTime().toString("yyyy-MM-dd hh:mm:ss")
+        now = QtCore.QDateTime.currentDateTime().toString("dd-MM-yyyy hh:mm:ss")
         logo_html = f"<img src='{logo_data_uri}' style='max-height:60px'/>" if logo_data_uri else ""
         invoice_line = f"Invoice #: {int(invoice_number)}<br/>" if invoice_number else ""
         try:
@@ -1698,3 +2190,4 @@ class POSView(QtWidgets.QWidget):
             self.user_id = int(user.get("id", 0) or 0)
         except Exception:
             self.user_id = 0
+

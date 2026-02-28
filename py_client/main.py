@@ -6,11 +6,11 @@ import socket
 import time
 from contextlib import closing
 
-from PyQt5 import QtWidgets, QtCore
+from PyQt5 import QtWidgets, QtCore, QtGui
 import requests
 from api import ApiClient
 from app import PharmaApp
-from theme import apply_theme
+from theme import apply_theme, prepare_theme
 
 
 def find_open_port() -> int:
@@ -81,7 +81,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
 def main():
     # If API_URL is provided, use an existing backend; otherwise start one in-process
-    api_url = os.environ.get("API_URL", "http://127.0.0.1:8000")
+    api_url = (os.environ.get("API_URL") or "").strip()
     if api_url:
         api_url = api_url.rstrip("/")
     else:
@@ -101,12 +101,18 @@ def main():
             except Exception:
                 time.sleep(0.1)
 
+    prepare_theme()
     app = QtWidgets.QApplication(sys.argv)
     apply_theme(app)
+    icon_path = Path(__file__).resolve().parent / "assets" / "pharmaspot-icon-96.png"
+    if icon_path.is_file():
+        app.setWindowIcon(QtGui.QIcon(str(icon_path)))
     client = ApiClient(api_url)
     shell = PharmaApp(client)
     w = QtWidgets.QMainWindow()
     w.setWindowTitle("PharmaSpot")
+    if icon_path.is_file():
+        w.setWindowIcon(QtGui.QIcon(str(icon_path)))
     w.setCentralWidget(shell)
     w.resize(1280, 800)
     w.show()

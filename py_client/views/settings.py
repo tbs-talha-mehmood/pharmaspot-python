@@ -1,39 +1,78 @@
 from PyQt5 import QtWidgets
 from pathlib import Path
 import sys
+from .ui_common import apply_form_layout, apply_page_layout, polish_controls, set_accent, set_secondary
+from .users import UsersView
 
 
 class SettingsView(QtWidgets.QWidget):
     def __init__(self, api):
         super().__init__()
         self.api = api
+        self._allow_settings = True
+        self._allow_users = True
+        self._users_loaded = False
         self._build()
         self.refresh()
 
     def _build(self):
         layout = QtWidgets.QVBoxLayout(self)
-        title = QtWidgets.QLabel("Settings")
-        title.setObjectName("title")
-        layout.addWidget(title)
+        apply_page_layout(layout)
 
+        self.tabs = QtWidgets.QTabWidget()
+        layout.addWidget(self.tabs, 1)
+
+        # Business Setting
+        business_tab = QtWidgets.QWidget()
+        business_layout = QtWidgets.QVBoxLayout(business_tab)
+        apply_page_layout(business_layout)
         form = QtWidgets.QFormLayout()
+        apply_form_layout(form)
         self.business_name = QtWidgets.QLineEdit()
+        self.business_name.setPlaceholderText("Business name")
         self.receipt_footer = QtWidgets.QLineEdit()
-        self.vat_percent = QtWidgets.QDoubleSpinBox(); self.vat_percent.setRange(0, 100); self.vat_percent.setDecimals(2)
+        self.receipt_footer.setPlaceholderText("Receipt footer note")
+        self.vat_percent = QtWidgets.QDoubleSpinBox()
+        self.vat_percent.setRange(0, 100)
+        self.vat_percent.setDecimals(2)
         form.addRow("Business Name", self.business_name)
         form.addRow("Receipt Footer", self.receipt_footer)
         form.addRow("VAT %", self.vat_percent)
-        layout.addLayout(form)
+        business_layout.addLayout(form)
+        business_btns = QtWidgets.QHBoxLayout()
+        self.btn_save_business = QtWidgets.QPushButton("Save")
+        self.btn_refresh_business = QtWidgets.QPushButton("Refresh")
+        set_accent(self.btn_save_business)
+        set_secondary(self.btn_refresh_business)
+        business_btns.addWidget(self.btn_save_business)
+        business_btns.addWidget(self.btn_refresh_business)
+        business_btns.addStretch(1)
+        business_layout.addLayout(business_btns)
+        business_layout.addStretch(1)
 
+        # Database Setting
+        database_tab = QtWidgets.QWidget()
+        database_layout = QtWidgets.QVBoxLayout(database_tab)
+        apply_page_layout(database_layout)
         db_group = QtWidgets.QGroupBox("Database (MySQL)")
         db_form = QtWidgets.QFormLayout(db_group)
-        self.db_engine = QtWidgets.QComboBox(); self.db_engine.addItems(["mysql"])
-        self.db_host = QtWidgets.QLineEdit(); self.db_host.setPlaceholderText("e.g. localhost")
-        self.db_port = QtWidgets.QSpinBox(); self.db_port.setRange(1, 65535); self.db_port.setValue(3306)
+        apply_form_layout(db_form)
+        self.db_engine = QtWidgets.QComboBox()
+        self.db_engine.addItems(["mysql"])
+        self.db_host = QtWidgets.QLineEdit()
+        self.db_host.setPlaceholderText("e.g. localhost")
+        self.db_port = QtWidgets.QSpinBox()
+        self.db_port.setRange(1, 65535)
+        self.db_port.setValue(3306)
         self.db_name = QtWidgets.QLineEdit()
+        self.db_name.setPlaceholderText("Database name")
         self.db_user = QtWidgets.QLineEdit()
-        self.db_password = QtWidgets.QLineEdit(); self.db_password.setEchoMode(QtWidgets.QLineEdit.Password)
-        self.db_url = QtWidgets.QLineEdit(); self.db_url.setPlaceholderText("Optional: full SQLAlchemy URL (overrides above)")
+        self.db_user.setPlaceholderText("Database user")
+        self.db_password = QtWidgets.QLineEdit()
+        self.db_password.setEchoMode(QtWidgets.QLineEdit.Password)
+        self.db_password.setPlaceholderText("Database password")
+        self.db_url = QtWidgets.QLineEdit()
+        self.db_url.setPlaceholderText("Optional full SQLAlchemy URL (overrides above)")
         db_form.addRow("Engine", self.db_engine)
         db_form.addRow("Host", self.db_host)
         db_form.addRow("Port", self.db_port)
@@ -41,23 +80,31 @@ class SettingsView(QtWidgets.QWidget):
         db_form.addRow("User", self.db_user)
         db_form.addRow("Password", self.db_password)
         db_form.addRow("DATABASE_URL", self.db_url)
-        layout.addWidget(db_group)
+        database_layout.addWidget(db_group)
+        db_btns = QtWidgets.QHBoxLayout()
+        self.btn_reload_db = QtWidgets.QPushButton("Reload")
+        self.btn_save_db = QtWidgets.QPushButton("Save DB Settings (restart app after)")
+        set_secondary(self.btn_reload_db)
+        set_accent(self.btn_save_db)
+        db_btns.addWidget(self.btn_reload_db)
+        db_btns.addWidget(self.btn_save_db)
+        db_btns.addStretch(1)
+        database_layout.addLayout(db_btns)
+        database_layout.addStretch(1)
 
-        btns = QtWidgets.QHBoxLayout()
-        save = QtWidgets.QPushButton("Save")
-        refresh = QtWidgets.QPushButton("Refresh")
-        save_db = QtWidgets.QPushButton("Save DB Settings (restart app after)")
-        btns.addWidget(save)
-        btns.addWidget(refresh)
-        btns.addWidget(save_db)
-        btns.addStretch(1)
-        layout.addLayout(btns)
+        # User Setting
+        self.user_tab = UsersView(self.api, auto_refresh=False)
 
-        save.clicked.connect(self.save)
-        refresh.clicked.connect(self.refresh)
-        save_db.clicked.connect(self.save_db)
+        self._business_tab_index = self.tabs.addTab(business_tab, "Business Settings")
+        self._database_tab_index = self.tabs.addTab(database_tab, "Database Setting")
+        self._user_tab_index = self.tabs.addTab(self.user_tab, "User Setting")
 
-        layout.addStretch(1)
+        self.btn_save_business.clicked.connect(self.save)
+        self.btn_refresh_business.clicked.connect(self.refresh)
+        self.btn_reload_db.clicked.connect(self._load_db_env)
+        self.btn_save_db.clicked.connect(self.save_db)
+        self.tabs.currentChanged.connect(self._on_tab_changed)
+        polish_controls(self)
 
     def refresh(self):
         try:
@@ -72,6 +119,47 @@ class SettingsView(QtWidgets.QWidget):
         except Exception:
             self.vat_percent.setValue(0.0)
         self._load_db_env()
+        if self._allow_users and self.tabs.currentIndex() == self._user_tab_index:
+            self._refresh_users_tab()
+
+    def set_user(self, user: dict):
+        self._allow_settings = bool(user.get("perm_settings", False))
+        self._allow_users = bool(user.get("perm_users", False))
+        self._apply_tab_visibility()
+
+    def _set_tab_visible(self, index: int, visible: bool):
+        try:
+            self.tabs.setTabVisible(index, visible)
+        except Exception:
+            try:
+                self.tabs.tabBar().setTabVisible(index, visible)
+            except Exception:
+                self.tabs.setTabEnabled(index, visible)
+
+    def _apply_tab_visibility(self):
+        self._set_tab_visible(self._business_tab_index, self._allow_settings)
+        self._set_tab_visible(self._database_tab_index, self._allow_settings)
+        self._set_tab_visible(self._user_tab_index, self._allow_users)
+        if self.tabs.currentIndex() == self._user_tab_index and not self._allow_users:
+            if self._allow_settings:
+                self.tabs.setCurrentIndex(self._business_tab_index)
+            elif self._allow_users:
+                self.tabs.setCurrentIndex(self._user_tab_index)
+        if self.tabs.currentIndex() in (self._business_tab_index, self._database_tab_index) and not self._allow_settings:
+            if self._allow_users:
+                self.tabs.setCurrentIndex(self._user_tab_index)
+
+    def _on_tab_changed(self, index: int):
+        if index == self._user_tab_index and self._allow_users:
+            self._refresh_users_tab()
+
+    def _refresh_users_tab(self):
+        try:
+            self.user_tab.refresh()
+            self._users_loaded = True
+        except Exception:
+            if self._users_loaded:
+                raise
 
     def save(self):
         try:

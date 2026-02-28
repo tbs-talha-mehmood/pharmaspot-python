@@ -1,4 +1,15 @@
 from PyQt5 import QtWidgets
+from .ui_common import (
+    apply_form_layout,
+    apply_header_layout,
+    apply_page_layout,
+    configure_table,
+    fit_dialog_to_contents,
+    polish_controls,
+    set_accent,
+    set_danger,
+    set_secondary,
+)
 
 
 class CompaniesView(QtWidgets.QWidget):
@@ -10,16 +21,16 @@ class CompaniesView(QtWidgets.QWidget):
 
     def _build(self):
         layout = QtWidgets.QVBoxLayout(self)
+        apply_page_layout(layout)
         header = QtWidgets.QHBoxLayout()
+        apply_header_layout(header)
         self.chk_inactive = QtWidgets.QCheckBox("Show inactive")
-        title = QtWidgets.QLabel("Companies")
-        title.setObjectName("title")
-        header.addWidget(title)
-        self.btn_refresh = QtWidgets.QPushButton("Refresh")
         self.btn_add = QtWidgets.QPushButton("Add Company")
         self.btn_edit = QtWidgets.QPushButton("Edit")
         self.btn_delete = QtWidgets.QPushButton("Delete")
-        header.addWidget(self.btn_refresh)
+        set_secondary(self.btn_edit)
+        set_accent(self.btn_add)
+        set_danger(self.btn_delete)
         header.addWidget(self.btn_add)
         header.addWidget(self.btn_edit)
         header.addWidget(self.btn_delete)
@@ -29,17 +40,16 @@ class CompaniesView(QtWidgets.QWidget):
 
         self.table = QtWidgets.QTableWidget(0, 2)
         self.table.setHorizontalHeaderLabels(["ID", "Name"])
+        configure_table(self.table)
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
-        self.table.verticalHeader().setVisible(False)
-        self.table.setAlternatingRowColors(True)
         layout.addWidget(self.table)
 
-        self.btn_refresh.clicked.connect(self.refresh)
         self.btn_add.clicked.connect(self.add_dialog)
         self.btn_edit.clicked.connect(self.edit_selected)
         self.btn_delete.clicked.connect(self.delete_selected)
         self.chk_inactive.stateChanged.connect(self.refresh)
+        polish_controls(self)
 
     def refresh(self):
         try:
@@ -58,12 +68,16 @@ class CompaniesView(QtWidgets.QWidget):
         d = QtWidgets.QDialog(self)
         d.setWindowTitle("Add Company")
         form = QtWidgets.QFormLayout(d)
+        apply_form_layout(form)
         name = QtWidgets.QLineEdit()
+        name.setPlaceholderText("Company name")
         form.addRow("Name", name)
         btns = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
         form.addRow(btns)
         btns.accepted.connect(d.accept)
         btns.rejected.connect(d.reject)
+        polish_controls(d)
+        fit_dialog_to_contents(d, min_width=420, fixed=True)
         if d.exec_() == QtWidgets.QDialog.Accepted:
             payload = {"name": name.text().strip()}
             try:
@@ -97,6 +111,7 @@ class CompaniesView(QtWidgets.QWidget):
         d = QtWidgets.QDialog(self)
         d.setWindowTitle("Edit Company")
         form = QtWidgets.QFormLayout(d)
+        apply_form_layout(form)
         name = QtWidgets.QLineEdit()
         name.setText(selected.get("name", ""))
         form.addRow("Name", name)
@@ -104,6 +119,8 @@ class CompaniesView(QtWidgets.QWidget):
         form.addRow(btns)
         btns.accepted.connect(d.accept)
         btns.rejected.connect(d.reject)
+        polish_controls(d)
+        fit_dialog_to_contents(d, min_width=420, fixed=True)
         if d.exec_() == QtWidgets.QDialog.Accepted:
             payload = {"id": selected["id"], "name": name.text().strip()}
             try:

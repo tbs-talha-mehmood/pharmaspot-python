@@ -1,4 +1,15 @@
 from PyQt5 import QtWidgets, QtCore
+from .ui_common import (
+    apply_form_layout,
+    apply_header_layout,
+    apply_page_layout,
+    configure_table,
+    fit_dialog_to_contents,
+    polish_controls,
+    set_accent,
+    set_danger,
+    set_secondary,
+)
 
 
 class ProductsView(QtWidgets.QWidget):
@@ -10,52 +21,54 @@ class ProductsView(QtWidgets.QWidget):
 
     def _build(self):
         layout = QtWidgets.QVBoxLayout(self)
+        apply_page_layout(layout)
         header = QtWidgets.QHBoxLayout()
-        title = QtWidgets.QLabel("Products")
-        title.setObjectName("title")
-        header.addWidget(title)
+        apply_header_layout(header)
         self.filter_company = QtWidgets.QComboBox()
         self.filter_company.setMinimumWidth(200)
         self.filter_company.addItem("All companies", 0)
-        self.btn_refresh = QtWidgets.QPushButton("Refresh")
         self.btn_add = QtWidgets.QPushButton("Add Product")
         self.btn_edit = QtWidgets.QPushButton("Edit")
         self.btn_delete = QtWidgets.QPushButton("Delete")
+        set_secondary(self.btn_edit)
+        set_accent(self.btn_add)
+        set_danger(self.btn_delete)
         header.addWidget(self.filter_company)
-        header.addWidget(self.btn_refresh)
         header.addWidget(self.btn_add)
         header.addWidget(self.btn_edit)
         header.addWidget(self.btn_delete)
         header.addStretch(1)
         self.search = QtWidgets.QLineEdit()
         self.search.setPlaceholderText("Search by name")
+        self.search.setClearButtonEnabled(True)
         self.search.setMinimumWidth(360)
+        self.search.installEventFilter(self)
         header.addWidget(self.search)
         layout.addLayout(header)
 
         self.table = QtWidgets.QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(["ID", "Name", "Qty", "Price", "Company"])
+        configure_table(self.table, stretch_last=False)
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)
         hdr.setSectionResizeMode(1, QtWidgets.QHeaderView.Stretch)
         hdr.setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeToContents)
         hdr.setSectionResizeMode(3, QtWidgets.QHeaderView.ResizeToContents)
         hdr.setSectionResizeMode(4, QtWidgets.QHeaderView.Stretch)
-        self.table.verticalHeader().setVisible(False)
-        self.table.setAlternatingRowColors(True)
         layout.addWidget(self.table)
 
         pager = QtWidgets.QHBoxLayout()
         self.btn_prev = QtWidgets.QPushButton("Prev")
         self.btn_next = QtWidgets.QPushButton("Next")
+        set_secondary(self.btn_prev, self.btn_next)
         self.page_label = QtWidgets.QLabel("Page 1 / 1")
+        self.page_label.setObjectName("mutedLabel")
         pager.addWidget(self.btn_prev)
         pager.addWidget(self.btn_next)
         pager.addWidget(self.page_label)
         pager.addStretch(1)
         layout.addLayout(pager)
 
-        self.btn_refresh.clicked.connect(self.refresh)
         self.btn_add.clicked.connect(self.add_product_dialog)
         self.btn_edit.clicked.connect(self.edit_selected)
         self.btn_delete.clicked.connect(self.delete_selected)
@@ -70,6 +83,16 @@ class ProductsView(QtWidgets.QWidget):
         QtCore.QTimer.singleShot(0, self.refresh)
         self._page = 1
         self._pages = 1
+        polish_controls(self)
+
+    def focus_search(self):
+        self.search.setFocus(QtCore.Qt.OtherFocusReason)
+        self.search.selectAll()
+
+    def eventFilter(self, obj, event):
+        if obj is self.search and event.type() == QtCore.QEvent.FocusIn:
+            QtCore.QTimer.singleShot(0, self.search.selectAll)
+        return super().eventFilter(obj, event)
 
     def _on_search_changed(self):
         self._search_timer.stop()
@@ -144,7 +167,9 @@ class ProductsView(QtWidgets.QWidget):
         d = QtWidgets.QDialog(self)
         d.setWindowTitle(title)
         form = QtWidgets.QFormLayout(d)
+        apply_form_layout(form)
         name = QtWidgets.QLineEdit()
+        name.setPlaceholderText("Product name")
         price = QtWidgets.QDoubleSpinBox()
         price.setMaximum(10**9)
         price.setDecimals(2)
@@ -174,6 +199,8 @@ class ProductsView(QtWidgets.QWidget):
         form.addRow(btns)
         btns.accepted.connect(d.accept)
         btns.rejected.connect(d.reject)
+        polish_controls(d)
+        fit_dialog_to_contents(d, min_width=440, fixed=True)
         return d, name, price, company
 
     def _selected_product(self):
