@@ -36,14 +36,22 @@ def _to_out(prod: Product, company_map: dict[int, str]) -> ProductOut:
         trade_price=trade_val,
         purchase_discount=discount_val,
         sale_discount=0.0,
+        is_active=bool(getattr(prod, "is_active", True)),
     )
 
 
 @router.get("/all", response_model=List[ProductOut])
-def list_products(company_id: int = 0, q: str = "", db: Session = Depends(get_db)):
+def list_products(
+    company_id: int = 0,
+    q: str = "",
+    include_inactive: bool = False,
+    db: Session = Depends(get_db),
+):
     companies = db.query(Company).all()
     company_map = {int(c.id): c.name for c in companies}
     query = db.query(Product)
+    if not include_inactive:
+        query = query.filter(Product.is_active == True)  # noqa: E712
     if company_id:
         query = query.filter(Product.company_id == int(company_id))
     if q:
@@ -57,6 +65,7 @@ def list_products(company_id: int = 0, q: str = "", db: Session = Depends(get_db
 def list_products_page(
     company_id: int = 0,
     q: str = "",
+    include_inactive: bool = False,
     page: int = 1,
     page_size: int = 25,
     db: Session = Depends(get_db),
@@ -66,6 +75,8 @@ def list_products_page(
     companies = db.query(Company).all()
     company_map = {int(c.id): c.name for c in companies}
     query = db.query(Product)
+    if not include_inactive:
+        query = query.filter(Product.is_active == True)  # noqa: E712
     if company_id:
         query = query.filter(Product.company_id == int(company_id))
     if q:
@@ -97,10 +108,12 @@ def upsert_product(payload: ProductCreate, db: Session = Depends(get_db)):
     if payload.id is not None:
         prod = db.query(Product).filter(Product.id == int(payload.id)).first()
         if not prod:
-            prod = Product(id=int(payload.id))
+            prod = Product(id=int(payload.id), is_active=True)
             db.add(prod)
+        elif prod.is_active is None:
+            prod.is_active = True
     else:
-        prod = Product()
+        prod = Product(is_active=True)
         db.add(prod)
 
     company_id = int(payload.company_id or 0)
@@ -150,6 +163,7 @@ def delete_product(product_id: int, db: Session = Depends(get_db)):
     prod = db.query(Product).filter(Product.id == product_id).first()
     if not prod:
         raise HTTPException(status_code=404, detail="Product not found")
-    db.delete(prod)
+    prod.is_active = False
+    db.add(prod)
     db.commit()
-    return {"ok": True}
+    return {"ok": True, "inactive": True}

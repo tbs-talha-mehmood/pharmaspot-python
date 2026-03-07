@@ -1,9 +1,11 @@
-from PyQt5 import QtWidgets
+from PyQt5 import QtWidgets, QtCore
+from datetime import datetime
 from .ui_common import (
     apply_form_layout,
     apply_header_layout,
     apply_page_layout,
     configure_table,
+    dialog_screen_limits,
     fit_dialog_to_contents,
     polish_controls,
     set_accent,
@@ -16,6 +18,7 @@ class CustomersView(QtWidgets.QWidget):
     def __init__(self, api):
         super().__init__()
         self.api = api
+        self.user_id = 0
         self._build()
         self.refresh()
 
@@ -36,6 +39,12 @@ class CustomersView(QtWidgets.QWidget):
         header.addWidget(self.btn_delete)
         header.addStretch(1)
         header.addWidget(self.chk_inactive)
+        self.search = QtWidgets.QLineEdit()
+        self.search.setPlaceholderText("Search name, phone, email, address")
+        self.search.setClearButtonEnabled(True)
+        self.search.setMinimumWidth(360)
+        self.search.installEventFilter(self)
+        header.addWidget(self.search)
         layout.addLayout(header)
 
         self.table = QtWidgets.QTableWidget(0, 5)
@@ -64,17 +73,47 @@ class CustomersView(QtWidgets.QWidget):
         self.btn_add.clicked.connect(self.add_dialog)
         self.btn_edit.clicked.connect(self.edit_selected)
         self.btn_delete.clicked.connect(self.delete_selected)
+        self.table.itemDoubleClicked.connect(lambda _item: self.open_profile_selected())
         self.btn_prev.clicked.connect(self._prev_page)
         self.btn_next.clicked.connect(self._next_page)
         self.chk_inactive.stateChanged.connect(self._on_filter_changed)
+        self._search_timer = QtCore.QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(300)
+        self._search_timer.timeout.connect(self.refresh)
+        self.search.textChanged.connect(self._on_search_changed)
         self._page = 1
         self._pages = 1
         polish_controls(self)
+
+    def focus_search(self):
+        self.search.setFocus(QtCore.Qt.OtherFocusReason)
+        self.search.selectAll()
+
+    def eventFilter(self, obj, event):
+        if obj is self.search and event.type() == QtCore.QEvent.FocusIn:
+            QtCore.QTimer.singleShot(0, self.search.selectAll)
+        return super().eventFilter(obj, event)
+
+    def _on_search_changed(self):
+        self._search_timer.stop()
+        if len(self.search.text().strip()) >= 3:
+            self._search_timer.start()
+        else:
+            self._page = 1
+            self.refresh()
+
+    def set_user(self, user: dict):
+        try:
+            self.user_id = int((user or {}).get("id", 0) or 0)
+        except Exception:
+            self.user_id = 0
 
     def refresh(self):
         try:
             data = self.api.customers_page(
                 include_inactive=self.chk_inactive.isChecked(),
+                q=self.search.text().strip(),
                 page=self._page,
                 page_size=25,
             )
@@ -164,6 +203,276 @@ class CustomersView(QtWidgets.QWidget):
             return self.api.customer_get(cid)
         except Exception:
             return None
+
+    def _split_datetime(self, raw_value):
+        dt = str(raw_value or "").strip()
+        if not dt:
+            return "", ""
+        try:
+            parsed = datetime.fromisoformat(dt.replace("Z", "+00:00"))
+            return parsed.strftime("%d-%m-%Y"), parsed.strftime("%H:%M:%S")
+        except Exception:
+            normalized = dt.replace("T", " ")
+            parts = normalized.split()
+            date_txt = parts[0] if parts else normalized
+            try:
+                date_txt = datetime.strptime(date_txt, "%Y-%m-%d").strftime("%d-%m-%Y")
+            except Exception:
+                pass
+            time_txt = ""
+            if len(parts) > 1:
+                time_txt = parts[1]
+                if "." in time_txt:
+                    time_txt = time_txt.split(".", 1)[0]
+                if len(time_txt) > 8 and time_txt[8] in ("+", "-"):
+                    time_txt = time_txt[:8]
+            return date_txt, time_txt
+
+    def _customer_transactions(self, customer_id: int):
+        docs = self.api.transactions_by_customer(int(customer_id))
+        if isinstance(docs, dict):
+            detail = str(docs.get("detail", "") or "").strip()
+            if detail:
+                raise ValueError(detail)
+            return []
+        return list(docs or [])
+
+    def open_profile_selected(self):
+        customer = self._selected_customer()
+        if not customer:
+            QtWidgets.QMessageBox.information(self, "Select", "Select a customer row first")
+            return
+        try:
+            cid = int(customer.get("id", 0) or 0)
+        except Exception:
+            cid = 0
+        if cid <= 0:
+            QtWidgets.QMessageBox.information(self, "Select", "Invalid customer")
+            return
+        cname = str(customer.get("name", "") or "Customer")
+        max_dlg_w, max_dlg_h = dialog_screen_limits(
+            width_ratio=0.92,
+            height_ratio=0.90,
+            fallback_width=1120,
+            fallback_height=760,
+        )
+        row_h = 32
+        chrome_h = 224
+        col_widths = {
+            0: 96,   # Invoice #
+            1: 116,  # Date
+            2: 92,   # Time
+            3: 108,  # Total
+            4: 108,  # Paid
+            5: 108,  # Due
+            6: 102,  # Discount
+        }
+
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle(f"Customer Profile - {cname}")
+        v = QtWidgets.QVBoxLayout(dlg)
+        v.setContentsMargins(10, 10, 10, 10)
+        v.setSpacing(8)
+        title = QtWidgets.QLabel(f"{cname} (ID: {cid})")
+        title.setObjectName("moneyStrong")
+        v.addWidget(title)
+
+        summary_row = QtWidgets.QHBoxLayout()
+        apply_header_layout(summary_row)
+        summary_row.setSpacing(24)
+        inv_lbl = QtWidgets.QLabel("Invoices: 0")
+        total_lbl = QtWidgets.QLabel("Total: 0.00")
+        paid_lbl = QtWidgets.QLabel("Paid: 0.00")
+        due_lbl = QtWidgets.QLabel("Merged Due: 0.00")
+        due_lbl.setObjectName("moneyStrong")
+        summary_row.addWidget(inv_lbl)
+        summary_row.addWidget(total_lbl)
+        summary_row.addWidget(paid_lbl)
+        summary_row.addWidget(due_lbl)
+        summary_row.addStretch(1)
+        v.addLayout(summary_row)
+
+        table = QtWidgets.QTableWidget(0, 7)
+        table.setHorizontalHeaderLabels(["Invoice #", "Date", "Time", "Total", "Paid", "Due", "Discount"])
+        configure_table(table, stretch_last=False)
+        table.verticalHeader().setDefaultSectionSize(row_h)
+        table.setWordWrap(False)
+        table.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        table.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        hdr = table.horizontalHeader()
+        for col in range(7):
+            hdr.setSectionResizeMode(col, QtWidgets.QHeaderView.Fixed)
+            table.setColumnWidth(col, col_widths[col])
+        v.addWidget(table)
+
+        info_lbl = QtWidgets.QLabel("Merged payments are auto-allocated to oldest due invoices.")
+        info_lbl.setObjectName("mutedLabel")
+        v.addWidget(info_lbl)
+
+        overflow_lbl = QtWidgets.QLabel("")
+        overflow_lbl.setObjectName("mutedLabel")
+        overflow_lbl.setVisible(False)
+        v.addWidget(overflow_lbl)
+
+        state = {"due_total": 0.0, "total_rows": 0}
+
+        def _to_float(value, default=0.0):
+            try:
+                return float(value if value is not None else default)
+            except Exception:
+                return float(default)
+
+        def _fit_dialog():
+            table_frame = table.frameWidth() * 2 + 2
+            table_w = sum(col_widths.values()) + table_frame
+            table_h = table.frameWidth() * 2 + table.horizontalHeader().height() + (table.rowCount() * row_h) + 2
+            table.setFixedSize(table_w, table_h)
+            dlg.adjustSize()
+            dlg.setFixedSize(min(max_dlg_w, dlg.sizeHint().width()), min(max_dlg_h, dlg.sizeHint().height()))
+
+        def _refresh_profile():
+            try:
+                rows = self._customer_transactions(cid)
+            except Exception as e:
+                QtWidgets.QMessageBox.critical(dlg, "Error", str(e))
+                return False
+            rows.sort(key=lambda row: str(row.get("date", "") or ""), reverse=True)
+            state["total_rows"] = len(rows)
+            table.setRowCount(0)
+
+            total_sum = 0.0
+            paid_sum = 0.0
+            due_sum = 0.0
+            for t in rows:
+                total = max(0.0, _to_float(t.get("total", 0.0), 0.0))
+                paid = max(0.0, _to_float(t.get("paid", 0.0), 0.0))
+                due = max(0.0, total - paid)
+                total_sum += total
+                paid_sum += paid
+                due_sum += due
+
+            inv_lbl.setText(f"Invoices: {len(rows)}")
+            total_lbl.setText(f"Total: {total_sum:.2f}")
+            paid_lbl.setText(f"Paid: {paid_sum:.2f}")
+            due_lbl.setText(f"Merged Due: {due_sum:.2f}")
+            state["due_total"] = float(due_sum)
+            receive_btn.setEnabled(due_sum > 1e-9)
+
+            if not rows:
+                overflow_lbl.setVisible(False)
+                _fit_dialog()
+                return True
+
+            header_h = max(30, table.horizontalHeader().height())
+            max_rows_fit = max(1, int((max_dlg_h - chrome_h - header_h) / max(1, row_h)))
+            visible_rows = rows[:max_rows_fit]
+            hidden_count = max(0, len(rows) - len(visible_rows))
+
+            for t in visible_rows:
+                rr = table.rowCount()
+                table.insertRow(rr)
+                total = max(0.0, _to_float(t.get("total", 0.0), 0.0))
+                paid = max(0.0, _to_float(t.get("paid", 0.0), 0.0))
+                due = max(0.0, total - paid)
+                date_txt, time_txt = self._split_datetime(t.get("date", ""))
+                inv_id = int(t.get("id", 0) or 0)
+                disc_val = _to_float(t.get("discount", 0.0), 0.0)
+
+                inv_item = QtWidgets.QTableWidgetItem(str(inv_id))
+                date_item = QtWidgets.QTableWidgetItem(date_txt)
+                time_item = QtWidgets.QTableWidgetItem(time_txt)
+                total_item = QtWidgets.QTableWidgetItem(f"{total:.2f}")
+                paid_item = QtWidgets.QTableWidgetItem(f"{paid:.2f}")
+                due_item = QtWidgets.QTableWidgetItem(f"{due:.2f}")
+                disc_item = QtWidgets.QTableWidgetItem(f"{disc_val:.2f}")
+
+                inv_item.setTextAlignment(QtCore.Qt.AlignCenter)
+                date_item.setTextAlignment(QtCore.Qt.AlignCenter)
+                time_item.setTextAlignment(QtCore.Qt.AlignCenter)
+                total_item.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
+                paid_item.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
+                due_item.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
+                disc_item.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
+
+                table.setItem(rr, 0, inv_item)
+                table.setItem(rr, 1, date_item)
+                table.setItem(rr, 2, time_item)
+                table.setItem(rr, 3, total_item)
+                table.setItem(rr, 4, paid_item)
+                table.setItem(rr, 5, due_item)
+                table.setItem(rr, 6, disc_item)
+
+            if hidden_count > 0:
+                overflow_lbl.setText(
+                    f"Showing latest {len(visible_rows)} of {len(rows)} invoices to fit screen without scrolling."
+                )
+                overflow_lbl.setVisible(True)
+            else:
+                overflow_lbl.setVisible(False)
+            _fit_dialog()
+            return True
+
+        def _receive_payment():
+            merged_due = float(state.get("due_total", 0.0) or 0.0)
+            if merged_due <= 1e-9:
+                QtWidgets.QMessageBox.information(dlg, "Payment", "No due invoices for this customer.")
+                return
+            amount, ok = QtWidgets.QInputDialog.getDouble(
+                dlg,
+                "Receive Payment",
+                "Enter merged payment amount:",
+                value=merged_due,
+                min=0.01,
+                max=merged_due,
+                decimals=2,
+            )
+            if not ok:
+                return
+            try:
+                resp = self.api.customer_payment_apply(
+                    cid,
+                    float(amount),
+                    user_id=int(self.user_id or 0),
+                )
+            except Exception as e:
+                QtWidgets.QMessageBox.critical(dlg, "Error", str(e))
+                return
+            if isinstance(resp, dict) and resp.get("detail") and not resp.get("customer_id"):
+                QtWidgets.QMessageBox.information(dlg, "Payment", str(resp.get("detail")))
+                return
+            try:
+                applied = float((resp or {}).get("total_applied", 0.0) or 0.0)
+                remaining = float((resp or {}).get("total_due_after", 0.0) or 0.0)
+                alloc_count = len((resp or {}).get("allocations", []) or [])
+            except Exception:
+                applied = float(amount)
+                remaining = max(0.0, merged_due - float(amount))
+                alloc_count = 0
+            QtWidgets.QMessageBox.information(
+                dlg,
+                "Payment Applied",
+                f"Applied {applied:.2f} across {alloc_count} invoice(s).\nRemaining merged due: {remaining:.2f}",
+            )
+            _refresh_profile()
+
+        btn_row = QtWidgets.QHBoxLayout()
+        apply_header_layout(btn_row)
+        receive_btn = QtWidgets.QPushButton("Receive Payment")
+        refresh_btn = QtWidgets.QPushButton("Refresh")
+        close_btn = QtWidgets.QPushButton("Close")
+        set_accent(receive_btn)
+        set_secondary(refresh_btn, close_btn)
+        receive_btn.clicked.connect(_receive_payment)
+        refresh_btn.clicked.connect(_refresh_profile)
+        close_btn.clicked.connect(dlg.accept)
+        btn_row.addWidget(receive_btn)
+        btn_row.addWidget(refresh_btn)
+        btn_row.addStretch(1)
+        btn_row.addWidget(close_btn)
+        v.addLayout(btn_row)
+        polish_controls(dlg)
+        if _refresh_profile():
+            dlg.exec_()
 
     def _customer_dialog(self, title: str, existing: dict | None = None):
         d = QtWidgets.QDialog(self)

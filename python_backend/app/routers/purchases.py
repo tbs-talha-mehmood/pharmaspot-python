@@ -1,12 +1,16 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Dict, Any
+from sqlalchemy import func
 import json
 from datetime import datetime
+import math
 
 from ..database import get_db, Base, engine
-from ..models import Purchase, Product
+from ..models import Purchase, Product, Supplier
 from ..schemas import PurchaseCreate, PurchaseOut, PurchaseItem
+from ..services.period_lock import ensure_not_locked_for_date, parse_date_like
+from ..services.cogs import rebuild_and_persist_cogs_allocations
 
 
 Base.metadata.create_all(bind=engine)
@@ -57,6 +61,41 @@ def _normalize_supplier(supplier_id: int | None, supplier_name: str | None) -> t
     if sid <= 0 and not sname:
         raise HTTPException(status_code=400, detail="Supplier is required")
     return sid, sname
+
+
+def _resolve_supplier(db: Session, supplier_id: int | None, supplier_name: str | None) -> tuple[int, str]:
+    sid, sname = _normalize_supplier(supplier_id, supplier_name)
+    if sid > 0:
+        row = db.query(Supplier).filter(Supplier.id == int(sid)).first()
+        if row:
+            if row.is_active is None or not bool(row.is_active):
+                row.is_active = True
+                db.add(row)
+            return int(row.id or 0), str(row.name or sname or "").strip()
+        if not sname:
+            raise HTTPException(status_code=400, detail="Supplier not found")
+        # Create with provided ID only if it does not already exist.
+        new_row = Supplier(id=int(sid), name=str(sname).strip(), is_active=True)
+        db.add(new_row)
+        try:
+            db.flush()
+            return int(new_row.id or 0), str(new_row.name or "").strip()
+        except Exception:
+            db.rollback()
+            raise HTTPException(status_code=400, detail="Supplier could not be created")
+
+    # sid <= 0 with typed name
+    name_l = str(sname).strip().lower()
+    existing = db.query(Supplier).filter(func.lower(Supplier.name) == name_l).first()
+    if existing:
+        if existing.is_active is None or not bool(existing.is_active):
+            existing.is_active = True
+            db.add(existing)
+        return int(existing.id or 0), str(existing.name or sname or "").strip()
+    new_row = Supplier(name=str(sname).strip(), is_active=True)
+    db.add(new_row)
+    db.flush()
+    return int(new_row.id or 0), str(new_row.name or "").strip()
 
 
 def _sync_purchase_item_pricing(prod: Product, item: PurchaseItem) -> None:
@@ -148,7 +187,8 @@ def _apply_purchase_item(prod: Product, item: PurchaseItem) -> None:
 @router.post("/new", response_model=PurchaseOut)
 def create_purchase(payload: PurchaseCreate, db: Session = Depends(get_db)):
     now = payload.date or datetime.utcnow().isoformat()
-    supplier_id, supplier_name = _normalize_supplier(payload.supplier_id, payload.supplier_name)
+    ensure_not_locked_for_date(db, parse_date_like(now), "Posting purchase")
+    supplier_id, supplier_name = _resolve_supplier(db, payload.supplier_id, payload.supplier_name)
     obj = Purchase(
         date=now,
         supplier_id=supplier_id,
@@ -165,6 +205,7 @@ def create_purchase(payload: PurchaseCreate, db: Session = Depends(get_db)):
             db.add(prod)
     db.commit()
     db.refresh(obj)
+    rebuild_and_persist_cogs_allocations(db)
     return _to_dict(obj)
 
 
@@ -172,6 +213,26 @@ def create_purchase(payload: PurchaseCreate, db: Session = Depends(get_db)):
 def list_purchases(db: Session = Depends(get_db)):
     items = db.query(Purchase).all()
     return [_to_dict(p) for p in items]
+
+
+@router.get("/page", response_model=Dict[str, Any])
+def list_purchases_page(
+    page: int = 1,
+    page_size: int = 25,
+    db: Session = Depends(get_db),
+):
+    page = max(1, int(page or 1))
+    page_size = max(1, min(int(page_size or 25), 200))
+    q = db.query(Purchase)
+    total = q.count()
+    rows = q.offset((page - 1) * page_size).limit(page_size).all()
+    return {
+        "items": [_to_dict(p) for p in rows],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "pages": int(math.ceil(total / float(page_size))) if page_size else 1,
+    }
 
 
 @router.get("/purchase/{purchase_id}", response_model=PurchaseOut)
@@ -187,7 +248,9 @@ def update_purchase(purchase_id: int, payload: PurchaseCreate, db: Session = Dep
     p = db.query(Purchase).filter(Purchase.id == purchase_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Purchase not found")
-    supplier_id, supplier_name = _normalize_supplier(payload.supplier_id, payload.supplier_name)
+    ensure_not_locked_for_date(db, parse_date_like(p.date or ""), "Updating purchase")
+    ensure_not_locked_for_date(db, parse_date_like(payload.date or p.date or ""), "Updating purchase")
+    supplier_id, supplier_name = _resolve_supplier(db, payload.supplier_id, payload.supplier_name)
     # Apply quantity deltas (new - old) so post-sale updates remain consistent.
     try:
         prev_items = json.loads(p.items_json or "[]")
@@ -217,6 +280,7 @@ def update_purchase(purchase_id: int, payload: PurchaseCreate, db: Session = Dep
     db.add(p)
     db.commit()
     db.refresh(p)
+    rebuild_and_persist_cogs_allocations(db)
     return _to_dict(p)
 
 
@@ -225,6 +289,7 @@ def delete_purchase(purchase_id: int, db: Session = Depends(get_db)):
     p = db.query(Purchase).filter(Purchase.id == purchase_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Purchase not found")
+    ensure_not_locked_for_date(db, parse_date_like(p.date or ""), "Deleting purchase")
     # Revert stock increments; block delete if sold/used stock already consumed it.
     try:
         prev_items = json.loads(p.items_json or "[]")
@@ -235,4 +300,5 @@ def delete_purchase(purchase_id: int, db: Session = Depends(get_db)):
     _apply_quantity_delta(db, delta_by_pid)
     db.delete(p)
     db.commit()
+    rebuild_and_persist_cogs_allocations(db)
     return {"ok": True}

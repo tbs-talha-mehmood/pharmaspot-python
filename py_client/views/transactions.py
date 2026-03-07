@@ -81,13 +81,29 @@ class TransactionsView(QtWidgets.QWidget):
         self.table.setColumnWidth(8, 108)
         layout.addWidget(self.table)
 
-        self.start.dateChanged.connect(self.refresh)
-        self.end.dateChanged.connect(self.refresh)
-        self.user_filter.currentIndexChanged.connect(self.refresh)
+        pager = QtWidgets.QHBoxLayout()
+        self.btn_prev = QtWidgets.QPushButton("Prev")
+        self.btn_next = QtWidgets.QPushButton("Next")
+        set_secondary(self.btn_prev, self.btn_next)
+        self.page_label = QtWidgets.QLabel("Page 1 / 1")
+        self.page_label.setObjectName("mutedLabel")
+        pager.addWidget(self.btn_prev)
+        pager.addWidget(self.btn_next)
+        pager.addWidget(self.page_label)
+        pager.addStretch(1)
+        layout.addLayout(pager)
+
+        self.start.dateChanged.connect(self._on_filter_changed)
+        self.end.dateChanged.connect(self._on_filter_changed)
+        self.user_filter.currentIndexChanged.connect(self._on_filter_changed)
         self.btn_reset.clicked.connect(self._reset_filters)
         self.btn_payments.clicked.connect(self.show_payments)
         self.btn_delete.clicked.connect(self.delete_selected)
+        self.btn_prev.clicked.connect(self._prev_page)
+        self.btn_next.clicked.connect(self._next_page)
         self.btn_payments.setVisible(True)
+        self._page = 1
+        self._pages = 1
         polish_controls(self)
 
     def _reset_filters(self):
@@ -100,7 +116,22 @@ class TransactionsView(QtWidgets.QWidget):
         self.start.blockSignals(False)
         self.end.blockSignals(False)
         self.user_filter.blockSignals(False)
+        self._page = 1
         self.refresh()
+
+    def _on_filter_changed(self):
+        self._page = 1
+        self.refresh()
+
+    def _prev_page(self):
+        if self._page > 1:
+            self._page -= 1
+            self.refresh()
+
+    def _next_page(self):
+        if self._page < self._pages:
+            self._page += 1
+            self.refresh()
 
     def _rebuild_user_filter(self, docs):
         selected = 0
@@ -252,38 +283,29 @@ class TransactionsView(QtWidgets.QWidget):
 
     def refresh(self):
         try:
-            docs = self.api.transactions_list() or []
+            uid = int(self.user_filter.currentData() or 0)
+        except Exception:
+            uid = 0
+        try:
+            start_txt = self.start.date().toString("yyyy-MM-dd")
+            end_txt = self.end.date().toString("yyyy-MM-dd")
+            data = self.api.transactions_page(
+                start_date=start_txt,
+                end_date=end_txt,
+                user_id=uid,
+                page=self._page,
+                page_size=25,
+            )
+            docs = data.get("items", []) or []
+            self._pages = int(data.get("pages", 1) or 1)
+            self._page = max(1, min(int(data.get("page", self._page) or self._page), self._pages))
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Error", str(e))
             return
         self._load_name_lookups(docs)
         self._rebuild_user_filter(docs)
-        # filters
-        try:
-            start_dt = self.start.date().toPyDate()
-            end_dt = self.end.date().toPyDate()
-        except Exception:
-            start_dt = end_dt = None
-        try:
-            uid = int(self.user_filter.currentData() or 0)
-        except Exception:
-            uid = 0
-        out = []
-        for t in docs:
-            try:
-                ts = datetime.fromisoformat(t.get('date','').replace('Z',''))
-            except Exception:
-                ts = None
-            if start_dt and ts and ts.date() < start_dt:
-                continue
-            if end_dt and ts and ts.date() > end_dt:
-                continue
-            if uid and int(t.get('user_id',0)) != uid:
-                continue
-            out.append(t)
-        out.sort(key=lambda row: str(row.get("date", "") or ""), reverse=True)
         self.table.setRowCount(0)
-        for t in out:
+        for t in docs:
             r = self.table.rowCount()
             self.table.insertRow(r)
             total = float(t.get("total", 0.0) or 0.0)
@@ -331,6 +353,9 @@ class TransactionsView(QtWidgets.QWidget):
             self.table.setItem(r, 6, paid_item)
             self.table.setItem(r, 7, due_item)
             self.table.setItem(r, 8, discount_item)
+        self.page_label.setText(f"Page {self._page} / {self._pages}")
+        self.btn_prev.setEnabled(self._page > 1)
+        self.btn_next.setEnabled(self._page < self._pages)
 
     def delete_selected(self):
         r = self.table.currentRow()
@@ -348,19 +373,10 @@ class TransactionsView(QtWidgets.QWidget):
         if tid <= 0:
             QtWidgets.QMessageBox.information(self, "Select", "Invalid invoice number")
             return
-        try:
-            docs = self.api.transactions_list() or []
-        except Exception as e:
-            QtWidgets.QMessageBox.critical(self, "Error", str(e)); return
-        match = next((t for t in docs if int(t.get('id', 0) or 0) == tid), None)
-        if not match:
-            QtWidgets.QMessageBox.information(self, "Not Found", "Could not locate transaction to delete")
-            return
         if QtWidgets.QMessageBox.question(self, "Confirm", "Delete this transaction?") != QtWidgets.QMessageBox.Yes:
             return
         try:
-            import requests
-            requests.delete(self.api.base_url + f"/api/transactions/transaction/{tid}")
+            self.api.transaction_delete(tid)
             QtWidgets.QMessageBox.information(self, "Deleted", "Transaction deleted")
             self.refresh()
         except Exception as e:

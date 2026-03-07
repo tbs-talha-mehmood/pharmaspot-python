@@ -27,9 +27,10 @@ class ProductsView(QtWidgets.QWidget):
         self.filter_company = QtWidgets.QComboBox()
         self.filter_company.setMinimumWidth(200)
         self.filter_company.addItem("All companies", 0)
+        self.chk_inactive = QtWidgets.QCheckBox("Show inactive")
         self.btn_add = QtWidgets.QPushButton("Add Product")
         self.btn_edit = QtWidgets.QPushButton("Edit")
-        self.btn_delete = QtWidgets.QPushButton("Delete")
+        self.btn_delete = QtWidgets.QPushButton("Deactivate")
         set_secondary(self.btn_edit)
         set_accent(self.btn_add)
         set_danger(self.btn_delete)
@@ -38,6 +39,7 @@ class ProductsView(QtWidgets.QWidget):
         header.addWidget(self.btn_edit)
         header.addWidget(self.btn_delete)
         header.addStretch(1)
+        header.addWidget(self.chk_inactive)
         self.search = QtWidgets.QLineEdit()
         self.search.setPlaceholderText("Search by name")
         self.search.setClearButtonEnabled(True)
@@ -73,6 +75,7 @@ class ProductsView(QtWidgets.QWidget):
         self.btn_edit.clicked.connect(self.edit_selected)
         self.btn_delete.clicked.connect(self.delete_selected)
         self.filter_company.currentIndexChanged.connect(self._on_filter_changed)
+        self.chk_inactive.stateChanged.connect(self._on_filter_changed)
         self.btn_prev.clicked.connect(self._prev_page)
         self.btn_next.clicked.connect(self._next_page)
         self._search_timer = QtCore.QTimer(self)
@@ -113,12 +116,13 @@ class ProductsView(QtWidgets.QWidget):
     def refresh(self):
         try:
             selected_id = int(self.filter_company.currentData() or 0)
-            companies = self.api.companies()
+            companies = self.api.companies(include_inactive=self.chk_inactive.isChecked())
             self._rebuild_company_filter(companies, selected_id)
             filter_id = int(self.filter_company.currentData() or 0)
             data = self.api.products_page(
                 company_id=filter_id,
                 q=self.search.text().strip(),
+                include_inactive=self.chk_inactive.isChecked(),
                 page=self._page,
                 page_size=25,
             )
@@ -255,7 +259,7 @@ class ProductsView(QtWidgets.QWidget):
         if not existing:
             QtWidgets.QMessageBox.information(self, "Select", "Select a product row first")
             return
-        if QtWidgets.QMessageBox.question(self, "Confirm", "Delete this product?") != QtWidgets.QMessageBox.Yes:
+        if QtWidgets.QMessageBox.question(self, "Confirm", "Deactivate this product?") != QtWidgets.QMessageBox.Yes:
             return
         try:
             self.api.product_delete(int(existing.get("id")))

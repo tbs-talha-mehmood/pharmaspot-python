@@ -35,6 +35,7 @@ class Product(Base):
     # New canonical purchase fields
     discount_pct = Column(Float, default=0.0)   # last purchase discount percent
     trade_price = Column(Float, default=0.0)    # last purchase trade price (unit)
+    is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, server_default=func.now())
 
 
@@ -58,6 +59,14 @@ class Setting(Base):
 
 class Company(Base):
     __tablename__ = "companies"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(191), unique=True, nullable=False)
+    is_active = Column(Boolean, default=True)
+
+
+class Supplier(Base):
+    __tablename__ = "suppliers"
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(191), unique=True, nullable=False)
@@ -93,6 +102,18 @@ class Transaction(Base):
     inventory_deducted = Column(Boolean, default=False)
 
 
+class HeldSale(Base):
+    __tablename__ = "held_sales"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(255), default="")
+    created = Column(String(32), default="")
+    customer_id = Column(Integer, default=0)
+    discount = Column(Float, default=0.0)
+    paid = Column(Float, default=0.0)
+    items_json = Column(MYSQL_LONGTEXT if MYSQL_LONGTEXT is not None else Text, default="[]")
+
+
 class TransactionPayment(Base):
     __tablename__ = "transaction_payments"
 
@@ -102,6 +123,28 @@ class TransactionPayment(Base):
     user_id = Column(Integer, default=0)
     amount = Column(Float, default=0.0)
     paid_total = Column(Float, default=0.0)
+
+
+class TransactionCOGSAllocation(Base):
+    __tablename__ = "transaction_cogs_allocations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    transaction_id = Column(Integer, index=True, nullable=False)
+    transaction_item_index = Column(Integer, default=0)
+    transaction_date = Column(String(32), default="")
+    user_id = Column(Integer, default=0)
+    product_id = Column(Integer, index=True, nullable=False)
+    quantity = Column(Float, default=0.0)
+    unit_sale = Column(Float, default=0.0)
+    unit_cost = Column(Float, default=0.0)
+    sale_amount = Column(Float, default=0.0)
+    cost_amount = Column(Float, default=0.0)
+    profit_amount = Column(Float, default=0.0)
+    source_purchase_id = Column(Integer, default=0)
+    source_supplier_id = Column(Integer, default=0)
+    provisional = Column(Boolean, default=False)
+    settled = Column(Boolean, default=True)
+    created_at = Column(DateTime, server_default=func.now())
 
 
 # Track per-purchase discount and trade price entries per product

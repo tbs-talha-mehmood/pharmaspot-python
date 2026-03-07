@@ -83,6 +83,10 @@ class ShellView(QtWidgets.QWidget):
                     widget.refresh()
                 if widget is self.products and hasattr(widget, "focus_search"):
                     QtCore.QTimer.singleShot(0, widget.focus_search)
+                if widget is self.companies and hasattr(widget, "focus_search"):
+                    QtCore.QTimer.singleShot(0, widget.focus_search)
+                if widget is self.customers and hasattr(widget, "focus_search"):
+                    QtCore.QTimer.singleShot(0, widget.focus_search)
                 if widget is self.pos and hasattr(widget, "_focus_search"):
                     QtCore.QTimer.singleShot(0, widget._focus_search)
             except Exception:
@@ -111,5 +115,7 @@ class ShellView(QtWidgets.QWidget):
         )
         # pass user to POS for user_id in transactions
         self.pos.set_user(user)
+        if hasattr(self.customers, "set_user"):
+            self.customers.set_user(user)
         if hasattr(self.settings, "set_user"):
             self.settings.set_user(user)

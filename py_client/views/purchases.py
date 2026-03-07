@@ -20,6 +20,8 @@ class PurchasesView(QtWidgets.QWidget):
         super().__init__()
         self.api = api
         self._products_cache = None
+        self._history_page = 1
+        self._history_pages = 1
         self._build()
         self.refresh_history()
 
@@ -167,8 +169,22 @@ class PurchasesView(QtWidgets.QWidget):
         self.history_table.setColumnHidden(0, True)
         v.addWidget(self.history_table)
 
+        pager = QtWidgets.QHBoxLayout()
+        self.history_btn_prev = QtWidgets.QPushButton("Prev")
+        self.history_btn_next = QtWidgets.QPushButton("Next")
+        set_secondary(self.history_btn_prev, self.history_btn_next)
+        self.history_page_label = QtWidgets.QLabel("Page 1 / 1")
+        self.history_page_label.setObjectName("mutedLabel")
+        pager.addWidget(self.history_btn_prev)
+        pager.addWidget(self.history_btn_next)
+        pager.addWidget(self.history_page_label)
+        pager.addStretch(1)
+        v.addLayout(pager)
+
         self.btn_edit.clicked.connect(self._edit_selected)
         self.btn_delete.clicked.connect(self._delete_selected)
+        self.history_btn_prev.clicked.connect(self._prev_history_page)
+        self.history_btn_next.clicked.connect(self._next_history_page)
         polish_controls(parent)
 
     def refresh(self):
@@ -187,6 +203,16 @@ class PurchasesView(QtWidgets.QWidget):
         except Exception:
             pass
 
+    def _prev_history_page(self):
+        if self._history_page > 1:
+            self._history_page -= 1
+            self.refresh_history()
+
+    def _next_history_page(self):
+        if self._history_page < self._history_pages:
+            self._history_page += 1
+            self.refresh_history()
+
     def _load_products(self, force: bool = False):
         if force or self._products_cache is None:
             self._products_cache = self.api.products() or []
@@ -196,8 +222,8 @@ class PurchasesView(QtWidgets.QWidget):
         self.supplier_cb.clear()
         self.supplier_cb.addItem("Select or type name", 0)
         try:
-            for c in self.api.companies() or []:
-                self.supplier_cb.addItem(c.get("name", ""), int(c.get("id")))
+            for s in self.api.suppliers() or []:
+                self.supplier_cb.addItem(s.get("name", ""), int(s.get("id")))
         except Exception:
             pass
 
@@ -615,7 +641,7 @@ class PurchasesView(QtWidgets.QWidget):
             return
         try:
             if sid == 0 and sname:
-                created = self.api.company_upsert({"name": sname})
+                created = self.api.supplier_upsert({"name": sname})
                 if isinstance(created, dict) and created.get("detail"):
                     raise Exception(str(created.get("detail")))
                 try:
@@ -638,7 +664,16 @@ class PurchasesView(QtWidgets.QWidget):
 
     def refresh_history(self):
         try:
-            docs = self.api.purchases_list()
+            data = self.api.purchases_page(
+                page=self._history_page,
+                page_size=25,
+            )
+            docs = data.get("items", []) or []
+            self._history_pages = int(data.get("pages", 1) or 1)
+            self._history_page = max(
+                1,
+                min(int(data.get("page", self._history_page) or self._history_page), self._history_pages),
+            )
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Error", str(e))
             return
@@ -667,6 +702,9 @@ class PurchasesView(QtWidgets.QWidget):
             self.history_table.setItem(r, 3, supplier_item)
             self.history_table.setItem(r, 4, items_item)
             self.history_table.setItem(r, 5, total_item)
+        self.history_page_label.setText(f"Page {self._history_page} / {self._history_pages}")
+        self.history_btn_prev.setEnabled(self._history_page > 1)
+        self.history_btn_next.setEnabled(self._history_page < self._history_pages)
 
     def _split_datetime_text(self, raw_value):
         dt = str(raw_value or "").strip()
@@ -704,9 +742,8 @@ class PurchasesView(QtWidgets.QWidget):
             pid = int(pid_item.text())
         except Exception:
             return
-        docs = self.api.purchases_list() or []
-        match = next((p for p in docs if int(p.get("id", 0) or 0) == pid), None)
-        if not match:
+        match = self.api.purchase_get(pid)
+        if isinstance(match, dict) and match.get("detail"):
             QtWidgets.QMessageBox.information(self, "Not Found", "Could not locate purchase to edit")
             return
         self._load_purchase_into_form(match)
@@ -726,8 +763,7 @@ class PurchasesView(QtWidgets.QWidget):
         if QtWidgets.QMessageBox.question(self, "Confirm", "Delete this purchase?") != QtWidgets.QMessageBox.Yes:
             return
         try:
-            import requests
-            requests.delete(self.api.base_url + f"/api/purchases/purchase/{pid}")
+            self.api.purchase_delete(pid)
             QtWidgets.QMessageBox.information(self, "Deleted", "Purchase deleted")
             self.refresh_history()
         except Exception as e:

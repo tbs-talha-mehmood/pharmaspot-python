@@ -31,6 +31,7 @@ class POSView(QtWidgets.QWidget):
         self.user_id = 0
         self.products_cache = []
         self.held_sales: list[dict] = []
+        self._load_held_sales()
         self.vat_percent = 0.0
         self._edit_transaction_id = None
         self._edit_original_qty_by_product: dict[int, int] = {}
@@ -137,10 +138,10 @@ class POSView(QtWidgets.QWidget):
         self.results.installEventFilter(self)
 
         # Cart table (match Purchases columns)
-        self.table = QtWidgets.QTableWidget(0, 7)
+        self.table = QtWidgets.QTableWidget(0, 8)
         self.table.setObjectName("posCartTable")
         self.table.setHorizontalHeaderLabels([
-            "Product", "Retail", "% Discount", "Trade", "Addl %", "Qty", "Line Total",
+            "Product", "Retail", "% Discount", "Trade", "Addl %", "Qty", "Line Total", "Margin Tag",
         ])
         configure_table(self.table, stretch_last=False)
         self.table.verticalHeader().setDefaultSectionSize(40)
@@ -156,6 +157,7 @@ class POSView(QtWidgets.QWidget):
             4: 102,  # Addl %
             5: 92,   # Qty
             6: 152,  # Line Total
+            7: 148,  # Margin Tag
         }
         for col, width in col_widths.items():
             header.setSectionResizeMode(col, QtWidgets.QHeaderView.Fixed)
@@ -281,6 +283,7 @@ class POSView(QtWidgets.QWidget):
         # Shortcuts
         QtWidgets.QShortcut(QtGui.QKeySequence("F2"), self, activated=self._focus_search)
         QtWidgets.QShortcut(QtGui.QKeySequence("F8"), self, activated=self._show_purchase_history)
+        QtWidgets.QShortcut(QtGui.QKeySequence("F9"), self, activated=self._show_sales_history)
         QtWidgets.QShortcut(QtGui.QKeySequence("F11"), self, activated=self._hold_sale)
         QtWidgets.QShortcut(QtGui.QKeySequence("F12"), self, activated=self._resume_sale)
         QtWidgets.QShortcut(QtGui.QKeySequence(QtCore.Qt.Key_Delete), self, activated=self._remove_selected_row)
@@ -915,6 +918,248 @@ class POSView(QtWidgets.QWidget):
         dlg.setFixedSize(min(max_dlg_w, dlg.sizeHint().width()), min(max_dlg_h, dlg.sizeHint().height()))
         dlg.exec_()
 
+    def _show_sales_history(self):
+        sel = self._selected_product_for_history()
+        if not sel:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Select product",
+                "Select a product in the cart or search results to view its sales history.",
+            )
+            return
+        pid, name = sel
+
+        try:
+            selected_customer_id = int(self.customer.currentData() or 0)
+        except Exception:
+            selected_customer_id = 0
+        selected_customer_name = str(self.customer.currentText() or "").strip() or "Walk-in"
+
+        customer_name_by_id = {0: "Walk-in"}
+        for idx in range(self.customer.count()):
+            try:
+                cid = int(self.customer.itemData(idx) or 0)
+            except Exception:
+                cid = 0
+            cname = str(self.customer.itemText(idx) or "").strip()
+            if cname:
+                customer_name_by_id[cid] = cname
+
+        try:
+            docs = self._with_loader("Loading sales history...", self.api.transactions_list) or []
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Error", str(e))
+            return
+
+        def _to_float(value, fallback=0.0):
+            try:
+                return float(value if value is not None else fallback)
+            except Exception:
+                return float(fallback)
+
+        rows = []
+        for txn in docs:
+            try:
+                cust_id = int(txn.get("customer_id", 0) or 0)
+            except Exception:
+                cust_id = 0
+            if cust_id != selected_customer_id:
+                continue
+            date = txn.get("date", "")
+            for it in txn.get("items") or []:
+                try:
+                    item_pid = int(it.get("id", 0) or 0)
+                except Exception:
+                    item_pid = 0
+                if item_pid != pid:
+                    continue
+                try:
+                    qty = int(it.get("quantity", 0) or 0)
+                except Exception:
+                    qty = 0
+                if qty <= 0:
+                    continue
+                retail = _to_float(it.get("retail_price"), 0.0)
+                disc = it.get("discount_pct", None)
+                extra = it.get("extra_discount_pct", None)
+                trade = _to_float(it.get("trade_price"), retail)
+                unit = _to_float(it.get("unit_price"), trade)
+                try:
+                    disc = float(disc) if disc is not None else None
+                except Exception:
+                    disc = None
+                try:
+                    extra = float(extra) if extra is not None else None
+                except Exception:
+                    extra = None
+                rows.append(
+                    {
+                        "date": date,
+                        "customer": customer_name_by_id.get(cust_id, selected_customer_name or "Walk-in"),
+                        "qty": qty,
+                        "retail": retail,
+                        "trade": trade,
+                        "disc": disc,
+                        "extra": extra,
+                        "line_total": unit * qty,
+                    }
+                )
+
+        if not rows:
+            QtWidgets.QMessageBox.information(
+                self,
+                "No history",
+                "No recent sales found for this product for the selected customer.",
+            )
+            return
+
+        rows.sort(key=lambda r: r.get("date", ""), reverse=True)
+        screen = QtWidgets.QApplication.primaryScreen()
+        if screen:
+            geo = screen.availableGeometry()
+            max_dlg_w = int(geo.width() * 0.92)
+            max_dlg_h = int(geo.height() * 0.90)
+        else:
+            max_dlg_w = 1180
+            max_dlg_h = 760
+
+        row_h = 32
+        header_h = 34
+        chrome_h = 180  # title + optional note + buttons + margins
+        max_rows_fit = max(1, int((max_dlg_h - chrome_h - header_h) / max(1, row_h)))
+        visible_rows = rows[:max_rows_fit]
+        hidden_count = max(0, len(rows) - len(visible_rows))
+
+        def _date_only_text(raw_value):
+            dt = str(raw_value or "").strip()
+            if not dt:
+                return ""
+            try:
+                parsed = datetime.fromisoformat(dt.replace("Z", "+00:00"))
+                return parsed.strftime("%d-%m-%Y")
+            except Exception:
+                normalized = dt.replace("T", " ")
+                parts = normalized.split()
+                date_txt = parts[0] if parts else normalized
+                try:
+                    return datetime.strptime(date_txt, "%Y-%m-%d").strftime("%d-%m-%Y")
+                except Exception:
+                    return date_txt
+
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle(f"Sales for {name} ({selected_customer_name})")
+        v = QtWidgets.QVBoxLayout(dlg)
+        v.setContentsMargins(10, 10, 10, 10)
+        v.setSpacing(8)
+        v.addWidget(QtWidgets.QLabel(f"Recent sales for {name} - Customer: {selected_customer_name}"))
+        table = QtWidgets.QTableWidget(len(visible_rows), 8)
+        table.setHorizontalHeaderLabels(
+            ["Date", "Customer", "Qty", "Retail", "Trade", "%Disc", "Addl %", "Line Total"]
+        )
+        configure_table(table, stretch_last=False)
+        table.verticalHeader().setDefaultSectionSize(row_h)
+        table.setWordWrap(False)
+        table.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        table.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        hdr = table.horizontalHeader()
+        for col in range(8):
+            hdr.setSectionResizeMode(col, QtWidgets.QHeaderView.Fixed)
+
+        customer_texts = []
+        for r_idx, row in enumerate(visible_rows):
+            date_item = QtWidgets.QTableWidgetItem(_date_only_text(row["date"]))
+            customer_txt = str(row["customer"])
+            customer_texts.append(customer_txt)
+            customer_item = QtWidgets.QTableWidgetItem(customer_txt)
+            qty_item = QtWidgets.QTableWidgetItem(str(row["qty"]))
+            retail_item = QtWidgets.QTableWidgetItem(f"{row['retail']:.2f}")
+            trade_item = QtWidgets.QTableWidgetItem(f"{row['trade']:.2f}")
+            disc_val = "" if row["disc"] is None else f"{row['disc']:.2f}"
+            extra_val = "" if row["extra"] is None else f"{row['extra']:.2f}"
+            disc_item = QtWidgets.QTableWidgetItem(disc_val)
+            extra_item = QtWidgets.QTableWidgetItem(extra_val)
+            line_total_item = QtWidgets.QTableWidgetItem(f"{row['line_total']:.2f}")
+
+            date_item.setTextAlignment(QtCore.Qt.AlignCenter)
+            qty_item.setTextAlignment(QtCore.Qt.AlignCenter)
+            retail_item.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
+            trade_item.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
+            disc_item.setTextAlignment(QtCore.Qt.AlignCenter)
+            extra_item.setTextAlignment(QtCore.Qt.AlignCenter)
+            line_total_item.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
+
+            table.setItem(r_idx, 0, date_item)
+            table.setItem(r_idx, 1, customer_item)
+            table.setItem(r_idx, 2, qty_item)
+            table.setItem(r_idx, 3, retail_item)
+            table.setItem(r_idx, 4, trade_item)
+            table.setItem(r_idx, 5, disc_item)
+            table.setItem(r_idx, 6, extra_item)
+            table.setItem(r_idx, 7, line_total_item)
+
+        fm = table.fontMetrics()
+        customer_pref = fm.horizontalAdvance("Customer") + 28
+        for txt in customer_texts:
+            customer_pref = max(customer_pref, fm.horizontalAdvance(txt) + 30)
+        customer_pref = min(420, customer_pref)
+        pref_widths = {
+            0: 106,
+            1: customer_pref,
+            2: 58,
+            3: 96,
+            4: 96,
+            5: 70,
+            6: 70,
+            7: 112,
+        }
+        min_widths = {
+            0: 92,
+            1: 150,
+            2: 50,
+            3: 82,
+            4: 82,
+            5: 60,
+            6: 60,
+            7: 94,
+        }
+        widths = dict(pref_widths)
+        table_frame = table.frameWidth() * 2 + 2
+        available_table_w = max(520, max_dlg_w - 24 - table_frame)
+        overflow = max(0, sum(widths.values()) - available_table_w)
+        if overflow > 0:
+            customer_cut = min(overflow, widths[1] - min_widths[1])
+            widths[1] -= customer_cut
+            overflow -= customer_cut
+            for col in (0, 3, 4, 7, 5, 6, 2):
+                if overflow <= 0:
+                    break
+                cut = min(overflow, widths[col] - min_widths[col])
+                widths[col] -= cut
+                overflow -= cut
+        for col, width in widths.items():
+            table.setColumnWidth(col, int(width))
+        table_w = sum(widths.values()) + table_frame
+        table_h = table.frameWidth() * 2 + table.horizontalHeader().height() + (table.rowCount() * row_h) + 2
+        table.setFixedSize(table_w, table_h)
+        v.addWidget(table)
+        if hidden_count > 0:
+            info_lbl = QtWidgets.QLabel(
+                f"Showing latest {len(visible_rows)} of {len(rows)} sales to fit the screen without scrolling."
+            )
+            info_lbl.setObjectName("mutedLabel")
+            v.addWidget(info_lbl)
+        close_btn = QtWidgets.QPushButton("Close")
+        set_secondary(close_btn)
+        close_btn.clicked.connect(dlg.accept)
+        btn_row = QtWidgets.QHBoxLayout()
+        btn_row.addStretch(1)
+        btn_row.addWidget(close_btn)
+        v.addLayout(btn_row)
+        polish_controls(dlg)
+        dlg.adjustSize()
+        dlg.setFixedSize(min(max_dlg_w, dlg.sizeHint().width()), min(max_dlg_h, dlg.sizeHint().height()))
+        dlg.exec_()
+
     def _reopen_invoice_by_number(self):
         raw = (self.invoice_no.text() or "").strip()
         if not raw or not raw.isdigit():
@@ -1324,6 +1569,82 @@ class POSView(QtWidgets.QWidget):
         spin.setMinimumHeight(34)
         return spin
 
+    def _safe_float(self, value, default=None):
+        try:
+            return float(value)
+        except Exception:
+            return default
+
+    def _find_product_in_cache(self, product_id: int):
+        pid = int(product_id or 0)
+        if pid <= 0:
+            return None
+        for prod in self.products_cache or []:
+            try:
+                if int(prod.get("id", 0) or 0) == pid:
+                    return prod
+            except Exception:
+                continue
+        return None
+
+    def _estimate_cost_unit(self, product: dict):
+        pid = int(product.get("id", 0) or 0)
+        src = self._find_product_in_cache(pid) or product or {}
+        for key in ("cost_price", "purchase_price", "trade_price"):
+            val = self._safe_float(src.get(key), None)
+            if val is not None and val > 0:
+                return float(val)
+        retail = self._safe_float(src.get("price"), None)
+        discount = self._safe_float(src.get("discount_pct"), None)
+        if discount is None:
+            discount = self._safe_float(src.get("purchase_discount"), None)
+        if retail is not None and retail > 0 and discount is not None:
+            return max(0.0, float(retail) * (1.0 - (max(0.0, float(discount)) / 100.0)))
+        return None
+
+    def _ensure_margin_tag_item(self, row: int):
+        item = self.table.item(row, 7)
+        if item is None:
+            item = QtWidgets.QTableWidgetItem("")
+            item.setFlags(item.flags() & ~QtCore.Qt.ItemIsEditable)
+            item.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignCenter)
+            self.table.setItem(row, 7, item)
+        return item
+
+    def _update_row_margin_tag(self, row: int):
+        if row < 0 or row >= self.table.rowCount():
+            return
+        product_item = self.table.item(row, 0)
+        trade_item = self.table.item(row, 3)
+        if product_item is None or trade_item is None:
+            return
+        margin_item = self._ensure_margin_tag_item(row)
+        meta = product_item.data(QtCore.Qt.UserRole) or {}
+        cost_unit = self._safe_float(meta.get("cost_unit_estimate"), None)
+        if cost_unit is None or cost_unit <= 1e-9:
+            margin_item.setText("COST ?")
+            margin_item.setForeground(QtGui.QBrush(QtGui.QColor("#89A1C2")))
+            return
+        try:
+            trade = float(trade_item.text() or 0.0)
+            extra = float(self.table.cellWidget(row, 4).value() or 0.0)
+            qty = int(self.table.cellWidget(row, 5).value() or 0)
+            global_discount = float(self.discount.value() or 0.0)
+        except Exception:
+            return
+        unit_sale = max(0.0, trade * (1.0 - (extra / 100.0)) * (1.0 - (global_discount / 100.0)))
+        line_profit = float(qty) * (unit_sale - float(cost_unit))
+        if line_profit < -0.005:
+            margin_item.setText(f"LOSS {line_profit:.2f}")
+            margin_item.setForeground(QtGui.QBrush(QtGui.QColor("#F04438")))
+            return
+        if abs(line_profit) <= 0.005:
+            margin_item.setText("ZERO PROFIT")
+            margin_item.setForeground(QtGui.QBrush(QtGui.QColor("#FDB022")))
+            return
+        margin_item.setText("")
+        margin_item.setForeground(QtGui.QBrush(QtGui.QColor("#89A1C2")))
+
     def _add_product_to_cart(self, product: dict):
         row = self.table.rowCount()
         pid_for_stock = int(product.get("id", 0) or 0)
@@ -1366,6 +1687,7 @@ class POSView(QtWidgets.QWidget):
                 "id": int(product.get("id", 0) or 0),
                 "company_id": int(product.get("company_id", 0) or 0),
                 "name": str(product.get("name", "") or ""),
+                "cost_unit_estimate": self._estimate_cost_unit(product),
             },
         )
         self.table.setItem(row, 0, prod_item)
@@ -1421,6 +1743,12 @@ class POSView(QtWidgets.QWidget):
         line_total.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
         line_total.setForeground(QtGui.QBrush(QtGui.QColor("#f2f7ff")))
         self.table.setItem(row, 6, line_total)
+
+        margin_tag = QtWidgets.QTableWidgetItem("")
+        margin_tag.setFlags(margin_tag.flags() & ~QtCore.Qt.ItemIsEditable)
+        margin_tag.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignCenter)
+        margin_tag.setForeground(QtGui.QBrush(QtGui.QColor("#89A1C2")))
+        self.table.setItem(row, 7, margin_tag)
 
         # Connect recalc triggers
         for col in (1, 2, 4, 5):
@@ -1502,6 +1830,7 @@ class POSView(QtWidgets.QWidget):
             final = trade * (1.0 - (extra / 100.0))
             self.table.item(r, 3).setText(f"{trade:.2f}")
             self.table.item(r, 6).setText(f"{final * qty:.2f}")
+            self._update_row_margin_tag(r)
             # Refresh totals when any row value changes
             self._recalc_totals()
         except Exception:
@@ -1666,6 +1995,71 @@ class POSView(QtWidgets.QWidget):
         return None
 
     # ---------- Hold/Resume ----------
+    def _load_held_sales(self):
+        try:
+            raw = self.api.held_sales_list() or []
+        except Exception:
+            self.held_sales = []
+            return False
+        if isinstance(raw, dict):
+            self.held_sales = []
+            return False
+
+        def _as_int(value, default=0):
+            try:
+                return int(value)
+            except Exception:
+                return int(default)
+
+        def _as_float(value, default=0.0):
+            try:
+                return float(value)
+            except Exception:
+                return float(default)
+
+        cleaned: list[dict] = []
+        for snap in raw:
+            if not isinstance(snap, dict):
+                continue
+            items_raw = snap.get("items", [])
+            if not isinstance(items_raw, list):
+                continue
+            items = []
+            for it in items_raw:
+                if not isinstance(it, dict):
+                    continue
+                pid = _as_int(it.get("product_id", 0), 0)
+                qty = max(0, _as_int(it.get("qty", 0), 0))
+                if pid <= 0 or qty <= 0:
+                    continue
+                items.append(
+                    {
+                        "product_id": pid,
+                        "company_id": _as_int(it.get("company_id", 0), 0),
+                        "retail": _as_float(it.get("retail", 0.0), 0.0),
+                        "pct": _as_float(it.get("pct", 0.0), 0.0),
+                        "trade": _as_float(it.get("trade", 0.0), 0.0),
+                        "extra": _as_float(it.get("extra", 0.0), 0.0),
+                        "qty": qty,
+                        "label": str(it.get("label", "") or ""),
+                    }
+                )
+            if not items:
+                continue
+            cleaned.append(
+                {
+                    "id": _as_int(snap.get("id", 0), 0),
+                    "name": str(snap.get("name", "") or "").strip() or f"Hold {_as_int(len(cleaned) + 1, 1)}",
+                    "created": str(snap.get("created", "") or "").strip() or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "customer_id": _as_int(snap.get("customer_id", 0), 0),
+                    "discount": _as_float(snap.get("discount", 0.0), 0.0),
+                    "paid": _as_float(snap.get("paid", 0.0), 0.0),
+                    "items": items,
+                }
+            )
+        self.held_sales = cleaned
+        return True
+
     def _snapshot_cart(self) -> dict:
         items = []
         for r in range(self.table.rowCount()):
@@ -1761,7 +2155,15 @@ class POSView(QtWidgets.QWidget):
         if name is None:
             return
         snap["name"] = (name or "").strip() or default_name
-        self.held_sales.append(snap)
+        try:
+            saved = self._with_loader("Saving hold...", lambda: self.api.held_sale_new(snap))
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Error", str(e))
+            return
+        if isinstance(saved, dict) and str(saved.get("detail", "")).strip():
+            QtWidgets.QMessageBox.information(self, "Hold Sale", str(saved.get("detail", "")).strip())
+            return
+        self._load_held_sales()
         self._clear_cart()
         QtWidgets.QMessageBox.information(self, "Held", f"Sale held as \"{snap['name']}\".")
 
@@ -1806,11 +2208,19 @@ class POSView(QtWidgets.QWidget):
                 "Finish or cancel invoice editing before resuming a held sale.",
             )
             return
+        # Ensure product cache is fresh for stock checks
+        self._load_products_cache()
+        try:
+            loaded = self._with_loader("Loading held sales...", self._load_held_sales)
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Error", str(e))
+            return
+        if not loaded:
+            QtWidgets.QMessageBox.warning(self, "Hold Sale", "Could not load held sales from database.")
+            return
         if not self.held_sales:
             QtWidgets.QMessageBox.information(self, "None", "No held sales.")
             return
-        # Ensure product cache is fresh for stock checks
-        self._load_products_cache()
         max_dlg_w, max_dlg_h = dialog_screen_limits(width_ratio=0.90, height_ratio=0.82, fallback_width=960, fallback_height=700)
 
         dlg = QtWidgets.QDialog(self)
@@ -1890,12 +2300,31 @@ class POSView(QtWidgets.QWidget):
         if not sel:
             return
         idx = int(sel.data(QtCore.Qt.UserRole))
-        selected_snap = self.held_sales.pop(idx)
+        selected_snap = self.held_sales[idx]
+        hold_id = int(selected_snap.get("id", 0) or 0)
         # If user switches holds while cart has items, park current cart back into holds.
         if self.table.rowCount() > 0:
             parked = self._snapshot_cart()
             parked["name"] = f"Hold {datetime.now().strftime('%H:%M:%S')}"
-            self.held_sales.append(parked)
+            try:
+                parked_res = self._with_loader("Saving current cart as hold...", lambda: self.api.held_sale_new(parked))
+            except Exception as e:
+                QtWidgets.QMessageBox.critical(self, "Error", str(e))
+                return
+            if isinstance(parked_res, dict) and str(parked_res.get("detail", "")).strip():
+                QtWidgets.QMessageBox.information(self, "Hold Sale", str(parked_res.get("detail", "")).strip())
+                return
+        if hold_id <= 0:
+            QtWidgets.QMessageBox.warning(self, "Hold Sale", "Selected held sale is invalid.")
+            return
+        try:
+            del_res = self._with_loader("Resuming held sale...", lambda: self.api.held_sale_delete(hold_id))
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Error", str(e))
+            return
+        if isinstance(del_res, dict) and str(del_res.get("detail", "")).strip():
+            QtWidgets.QMessageBox.information(self, "Hold Sale", str(del_res.get("detail", "")).strip())
+            return
         self._load_cart_from_snapshot(selected_snap)
 
     def _with_loader(self, message: str, fn, *args, **kwargs):
@@ -1947,6 +2376,8 @@ class POSView(QtWidgets.QWidget):
         self.paid_prior_value_label.setText(f"{existing_paid:.2f}")
         self.paid_total_value_label.setText(f"{paid_amount:.2f}")
         self.due_label.setText(f"{due_amount:.2f}")
+        for r in range(self.table.rowCount()):
+            self._update_row_margin_tag(r)
 
     # ---------- Checkout ----------
     def checkout(self):

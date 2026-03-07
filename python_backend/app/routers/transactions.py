@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Dict, Any
 import json
 from datetime import datetime
+import math
 
 from ..database import get_db, Base, engine
 from ..models import Transaction, Product, TransactionPayment
@@ -12,7 +13,12 @@ from ..schemas import (
     TransactionItem,
     TransactionPaymentOut,
     TransactionPaymentEditIn,
+    CustomerPaymentApplyIn,
+    CustomerPaymentApplyOut,
+    CustomerPaymentAllocationOut,
 )
+from ..services.period_lock import ensure_not_locked_for_date, parse_date_like
+from ..services.cogs import rebuild_and_persist_cogs_allocations
 
 
 Base.metadata.create_all(bind=engine)
@@ -257,9 +263,36 @@ def _has_full_item_snapshot(items: list[TransactionItem]) -> bool:
     return True
 
 
+def _parse_filter_date(value: str):
+    txt = str(value or "").strip()
+    if not txt:
+        return None
+    try:
+        return datetime.strptime(txt, "%Y-%m-%d").date()
+    except Exception:
+        return None
+
+
+def _parse_transaction_date(raw_value: str):
+    dt = str(raw_value or "").strip()
+    if not dt:
+        return None
+    try:
+        return datetime.fromisoformat(dt.replace("Z", "+00:00")).date()
+    except Exception:
+        pass
+    try:
+        normalized = dt.replace("T", " ")
+        date_txt = normalized.split()[0] if normalized else ""
+        return datetime.strptime(date_txt, "%Y-%m-%d").date()
+    except Exception:
+        return None
+
+
 @router.post("/new", response_model=TransactionOut)
 def create_transaction(payload: TransactionCreate, db: Session = Depends(get_db)):
     now = payload.date or datetime.utcnow().isoformat()
+    ensure_not_locked_for_date(db, parse_date_like(now), "Posting sale")
     norm_items = _enrich_item_snapshots(_normalize_items(payload.items), db)
     total_amount, paid_amount = _validate_payment_bounds(payload.total or 0.0, payload.paid or 0.0)
     obj = Transaction(
@@ -289,6 +322,7 @@ def create_transaction(payload: TransactionCreate, db: Session = Depends(get_db)
     )
     db.commit()
     db.refresh(obj)
+    rebuild_and_persist_cogs_allocations(db)
     return _to_dict(obj)
 
 
@@ -296,6 +330,155 @@ def create_transaction(payload: TransactionCreate, db: Session = Depends(get_db)
 def list_transactions(db: Session = Depends(get_db)):
     rows = db.query(Transaction).order_by(Transaction.id.desc()).all()
     return [_to_dict(t) for t in rows]
+
+
+@router.get("/page", response_model=Dict[str, Any])
+def list_transactions_page(
+    start_date: str = "",
+    end_date: str = "",
+    user_id: int = 0,
+    page: int = 1,
+    page_size: int = 25,
+    db: Session = Depends(get_db),
+):
+    page = max(1, int(page or 1))
+    page_size = max(1, min(int(page_size or 25), 200))
+    start_dt = _parse_filter_date(start_date)
+    end_dt = _parse_filter_date(end_date)
+    uid = max(0, int(user_id or 0))
+
+    rows = db.query(Transaction).order_by(Transaction.id.desc()).all()
+    filtered: list[Transaction] = []
+    for t in rows:
+        if uid and int(t.user_id or 0) != uid:
+            continue
+        ts = _parse_transaction_date(t.date or "")
+        if start_dt and ts and ts < start_dt:
+            continue
+        if end_dt and ts and ts > end_dt:
+            continue
+        filtered.append(t)
+    filtered.sort(key=lambda row: str(row.date or ""), reverse=True)
+
+    total = len(filtered)
+    start = (page - 1) * page_size
+    end = start + page_size
+    items = filtered[start:end]
+    return {
+        "items": [_to_dict(t) for t in items],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "pages": int(math.ceil(total / float(page_size))) if page_size else 1,
+    }
+
+
+@router.get("/payments", response_model=List[TransactionPaymentOut])
+def list_all_transaction_payments(db: Session = Depends(get_db)):
+    rows = db.query(TransactionPayment).order_by(TransactionPayment.id.desc()).all()
+    return [_payment_to_dict(p) for p in rows]
+
+
+@router.get("/customer/{customer_id}/list", response_model=List[TransactionOut])
+def list_customer_transactions(customer_id: int, db: Session = Depends(get_db)):
+    if int(customer_id or 0) <= 0:
+        return []
+    rows = (
+        db.query(Transaction)
+        .filter(Transaction.customer_id == int(customer_id))
+        .order_by(Transaction.id.desc())
+        .all()
+    )
+    return [_to_dict(t) for t in rows]
+
+
+@router.post("/customer/{customer_id}/payment", response_model=CustomerPaymentApplyOut)
+def apply_customer_payment(
+    customer_id: int,
+    payload: CustomerPaymentApplyIn,
+    db: Session = Depends(get_db),
+):
+    cid = int(customer_id or 0)
+    if cid <= 0:
+        raise HTTPException(status_code=400, detail="Invalid customer ID")
+    try:
+        amount = float(payload.amount or 0.0)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid payment amount")
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Payment amount must be greater than zero")
+
+    rows = (
+        db.query(Transaction)
+        .filter(Transaction.customer_id == cid)
+        .order_by(Transaction.date.asc(), Transaction.id.asc())
+        .all()
+    )
+
+    due_rows: list[tuple[Transaction, float, float]] = []
+    total_due_before = 0.0
+    for t in rows:
+        total = max(0.0, float(t.total or 0.0))
+        paid = max(0.0, float(t.paid or 0.0))
+        due = max(0.0, total - paid)
+        if due > 1e-9:
+            due_rows.append((t, paid, due))
+            total_due_before += due
+
+    if not due_rows:
+        raise HTTPException(status_code=400, detail="No due invoices found for this customer")
+    if amount - total_due_before > 1e-6:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Amount exceeds merged due by {amount - total_due_before:.2f}",
+        )
+
+    payment_date = str(payload.date or "").strip() or datetime.utcnow().isoformat()
+    ensure_not_locked_for_date(db, parse_date_like(payment_date), "Applying payment")
+    remaining = amount
+    allocations: list[CustomerPaymentAllocationOut] = []
+    for t, paid_before, due_before in due_rows:
+        if remaining <= 1e-9:
+            break
+        applied = min(due_before, remaining)
+        if applied <= 1e-9:
+            continue
+        paid_after = paid_before + applied
+        t.paid = paid_after
+        db.add(t)
+        _record_payment(
+            db,
+            transaction_id=int(t.id or 0),
+            amount=applied,
+            paid_total=paid_after,
+            user_id=int(payload.user_id or 0),
+            date=payment_date,
+        )
+        allocations.append(
+            CustomerPaymentAllocationOut(
+                transaction_id=int(t.id or 0),
+                amount_applied=float(applied),
+                paid_before=float(paid_before),
+                paid_after=float(paid_after),
+                due_before=float(due_before),
+                due_after=float(max(0.0, due_before - applied)),
+            )
+        )
+        remaining -= applied
+
+    if not allocations:
+        raise HTTPException(status_code=400, detail="Could not allocate payment to due invoices")
+
+    db.commit()
+    total_applied = float(amount - max(0.0, remaining))
+    total_due_after = max(0.0, total_due_before - total_applied)
+    return CustomerPaymentApplyOut(
+        customer_id=cid,
+        total_due_before=float(total_due_before),
+        total_applied=float(total_applied),
+        total_due_after=float(total_due_after),
+        allocations=allocations,
+    )
 
 
 @router.get("/transaction/{transaction_id}", response_model=TransactionOut)
@@ -345,6 +528,7 @@ def update_transaction_payment(
     )
     if not row:
         raise HTTPException(status_code=404, detail="Payment entry not found")
+    ensure_not_locked_for_date(db, parse_date_like(row.date or ""), "Editing payment")
     try:
         new_amount = float(payload.amount or 0.0)
     except Exception:
@@ -377,6 +561,8 @@ def update_transaction(transaction_id: int, payload: TransactionCreate, db: Sess
     t = db.query(Transaction).filter(Transaction.id == transaction_id).first()
     if not t:
         raise HTTPException(status_code=404, detail="Transaction not found")
+    ensure_not_locked_for_date(db, parse_date_like(t.date or ""), "Updating sale")
+    ensure_not_locked_for_date(db, parse_date_like(payload.date or t.date or ""), "Updating sale")
     prev_paid = float(t.paid or 0.0)
     total_amount, new_paid = _validate_payment_bounds(payload.total or 0.0, payload.paid or 0.0)
     payment_delta = new_paid - prev_paid
@@ -407,6 +593,7 @@ def update_transaction(transaction_id: int, payload: TransactionCreate, db: Sess
     db.add(t)
     db.commit()
     db.refresh(t)
+    rebuild_and_persist_cogs_allocations(db)
     return _to_dict(t)
 
 
@@ -415,6 +602,7 @@ def delete_transaction(transaction_id: int, db: Session = Depends(get_db)):
     t = db.query(Transaction).filter(Transaction.id == transaction_id).first()
     if not t:
         raise HTTPException(status_code=404, detail="Transaction not found")
+    ensure_not_locked_for_date(db, parse_date_like(t.date or ""), "Deleting sale")
     # If inventory was deducted, add stock back before deletion
     if t.inventory_deducted:
         try:
@@ -436,4 +624,5 @@ def delete_transaction(transaction_id: int, db: Session = Depends(get_db)):
         db.delete(p)
     db.delete(t)
     db.commit()
+    rebuild_and_persist_cogs_allocations(db)
     return {"ok": True}

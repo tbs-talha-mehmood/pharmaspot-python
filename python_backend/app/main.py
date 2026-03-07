@@ -1,10 +1,12 @@
 import os
 from fastapi import FastAPI
 from sqlalchemy import inspect, text
-from .database import Base, engine
+from .database import Base, engine, SessionLocal
 from .routers import users, products
 from .routers import customers, settings
-from .routers import companies, purchases, transactions
+from .routers import companies, suppliers, purchases, transactions
+from .routers import held_sales
+from .services.cogs import rebuild_and_persist_cogs_allocations
 
 
 def create_app() -> FastAPI:
@@ -13,14 +15,17 @@ def create_app() -> FastAPI:
     app = FastAPI(title="PharmaSpot API")
     Base.metadata.create_all(bind=engine)
     _ensure_schema_updates()
+    _bootstrap_cogs_allocations()
 
     app.include_router(users.router)
     app.include_router(products.router)
     app.include_router(customers.router)
     app.include_router(settings.router)
     app.include_router(companies.router)
+    app.include_router(suppliers.router)
     app.include_router(purchases.router)
     app.include_router(transactions.router)
+    app.include_router(held_sales.router)
 
     @app.get("/")
     def root():
@@ -36,6 +41,12 @@ def _ensure_schema_updates() -> None:
         tables = set(insp.get_table_names())
         if "products" in tables:
             product_cols = {c.get("name") for c in insp.get_columns("products")}
+            if "is_active" not in product_cols:
+                try:
+                    with engine.begin() as conn:
+                        conn.execute(text("ALTER TABLE products ADD COLUMN is_active BOOLEAN DEFAULT 1"))
+                except Exception:
+                    pass
             if "purchase_price" in product_cols:
                 try:
                     with engine.begin() as conn:
@@ -56,6 +67,18 @@ def _ensure_schema_updates() -> None:
     except Exception:
         # Keep startup resilient if DB user lacks ALTER permission.
         pass
+
+
+def _bootstrap_cogs_allocations() -> None:
+    # Keep persisted COGS allocations in sync on startup for existing datasets.
+    db = SessionLocal()
+    try:
+        rebuild_and_persist_cogs_allocations(db)
+    except Exception:
+        # Startup should remain resilient if bootstrap fails.
+        pass
+    finally:
+        db.close()
 
 
 app = create_app()

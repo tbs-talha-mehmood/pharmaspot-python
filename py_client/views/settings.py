@@ -1,4 +1,4 @@
-from PyQt5 import QtWidgets
+from PyQt5 import QtWidgets, QtCore
 from pathlib import Path
 import sys
 from .ui_common import apply_form_layout, apply_page_layout, polish_controls, set_accent, set_secondary
@@ -35,9 +35,24 @@ class SettingsView(QtWidgets.QWidget):
         self.vat_percent = QtWidgets.QDoubleSpinBox()
         self.vat_percent.setRange(0, 100)
         self.vat_percent.setDecimals(2)
+        self.period_lock_enabled = QtWidgets.QCheckBox("Enable")
+        self.period_lock_date = QtWidgets.QDateEdit()
+        self.period_lock_date.setCalendarPopup(True)
+        self.period_lock_date.setDisplayFormat("dd-MM-yyyy")
+        self.period_lock_date.setDate(QtCore.QDate.currentDate())
+        self.period_lock_date.setEnabled(False)
+        self.period_lock_enabled.toggled.connect(self.period_lock_date.setEnabled)
+        lock_wrap = QtWidgets.QWidget()
+        lock_row = QtWidgets.QHBoxLayout(lock_wrap)
+        lock_row.setContentsMargins(0, 0, 0, 0)
+        lock_row.setSpacing(8)
+        lock_row.addWidget(self.period_lock_enabled)
+        lock_row.addWidget(self.period_lock_date)
+        lock_row.addStretch(1)
         form.addRow("Business Name", self.business_name)
         form.addRow("Receipt Footer", self.receipt_footer)
         form.addRow("VAT %", self.vat_percent)
+        form.addRow("Period Lock", lock_wrap)
         business_layout.addLayout(form)
         business_btns = QtWidgets.QHBoxLayout()
         self.btn_save_business = QtWidgets.QPushButton("Save")
@@ -118,6 +133,19 @@ class SettingsView(QtWidgets.QWidget):
             self.vat_percent.setValue(float(settings.get("vat_percent", 0)))
         except Exception:
             self.vat_percent.setValue(0.0)
+        try:
+            lock_info = self.api.period_lock_get() or {}
+        except Exception:
+            lock_info = {}
+        lock_until = str((lock_info or {}).get("lock_until", "") or "").strip()
+        if bool((lock_info or {}).get("locked", False)) and lock_until:
+            qd = QtCore.QDate.fromString(lock_until, "yyyy-MM-dd")
+            if not qd.isValid():
+                qd = QtCore.QDate.currentDate()
+            self.period_lock_enabled.setChecked(True)
+            self.period_lock_date.setDate(qd)
+        else:
+            self.period_lock_enabled.setChecked(False)
         self._load_db_env()
         if self._allow_users and self.tabs.currentIndex() == self._user_tab_index:
             self._refresh_users_tab()
@@ -166,6 +194,8 @@ class SettingsView(QtWidgets.QWidget):
             self.api.setting_set("business_name", self.business_name.text().strip())
             self.api.setting_set("receipt_footer", self.receipt_footer.text().strip())
             self.api.setting_set("vat_percent", str(self.vat_percent.value()))
+            lock_until = self.period_lock_date.date().toString("yyyy-MM-dd") if self.period_lock_enabled.isChecked() else None
+            self.api.period_lock_set(lock_until)
             QtWidgets.QMessageBox.information(self, "Saved", "Settings saved")
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Error", str(e))

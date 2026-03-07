@@ -1,3 +1,4 @@
+from collections import defaultdict, deque
 from datetime import datetime
 
 from PyQt5 import QtCore, QtWidgets
@@ -57,23 +58,33 @@ class ReportsView(QtWidgets.QWidget):
         metrics = QtWidgets.QHBoxLayout()
         apply_header_layout(metrics)
         tx_card, self.tx_count_label = self._metric_card("Transactions", "0")
-        gross_card, self.gross_label = self._metric_card("Gross Sales", "0.00")
-        paid_card, self.paid_label = self._metric_card("Paid", "0.00")
+        gross_card, self.gross_label = self._metric_card("Sales (Net)", "0.00")
+        paid_card, self.paid_label = self._metric_card("Cash Received", "0.00")
         due_card, self.due_label = self._metric_card("Due", "0.00")
+        profit_card, self.profit_label = self._metric_card("Profit (Accrual)", "0.00")
+        realized_card, self.realized_profit_label = self._metric_card("Profit (Realized)", "0.00")
         metrics.addWidget(tx_card)
         metrics.addWidget(gross_card)
         metrics.addWidget(paid_card)
         metrics.addWidget(due_card)
+        metrics.addWidget(profit_card)
+        metrics.addWidget(realized_card)
         layout.addLayout(metrics)
 
-        self.table = QtWidgets.QTableWidget(0, 6)
-        self.table.setHorizontalHeaderLabels(["Date", "Invoices", "Gross", "Paid", "Due", "Discount"])
+        self.provisional_note = QtWidgets.QLabel("")
+        self.provisional_note.setObjectName("mutedLabel")
+        layout.addWidget(self.provisional_note)
+
+        self.table = QtWidgets.QTableWidget(0, 9)
+        self.table.setHorizontalHeaderLabels(
+            ["Date", "Invoices", "Sales", "Received", "Due", "COGS", "Profit", "Realized", "Provisional"]
+        )
         configure_table(self.table, stretch_last=False)
         self.table.verticalHeader().setDefaultSectionSize(36)
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(0, QtWidgets.QHeaderView.Fixed)
         hdr.setSectionResizeMode(1, QtWidgets.QHeaderView.Fixed)
-        for col in (2, 3, 4, 5):
+        for col in (2, 3, 4, 5, 6, 7, 8):
             hdr.setSectionResizeMode(col, QtWidgets.QHeaderView.Stretch)
         self.table.setColumnWidth(0, 118)
         self.table.setColumnWidth(1, 92)
@@ -119,6 +130,259 @@ class ReportsView(QtWidgets.QWidget):
                 return datetime.strptime(dt.replace("T", " ").split(".", 1)[0], "%Y-%m-%d %H:%M:%S")
             except Exception:
                 return None
+
+    def _to_int(self, value, default: int = 0) -> int:
+        try:
+            return int(value if value is not None else default)
+        except Exception:
+            return int(default)
+
+    def _to_float(self, value, default: float = 0.0) -> float:
+        try:
+            return float(value if value is not None else default)
+        except Exception:
+            return float(default)
+
+    def _sale_unit_price(self, item: dict) -> float:
+        unit = item.get("unit_price")
+        if unit is not None:
+            return max(0.0, self._to_float(unit, 0.0))
+        trade = item.get("trade_price")
+        if trade is not None:
+            extra_pct = max(0.0, self._to_float(item.get("extra_discount_pct", 0.0), 0.0))
+            return max(0.0, self._to_float(trade, 0.0) * (1.0 - (extra_pct / 100.0)))
+        retail = self._to_float(item.get("retail_price", 0.0), 0.0)
+        disc_pct = max(0.0, self._to_float(item.get("discount_pct", 0.0), 0.0))
+        extra_pct = max(0.0, self._to_float(item.get("extra_discount_pct", 0.0), 0.0))
+        trade_calc = retail * (1.0 - (disc_pct / 100.0))
+        return max(0.0, trade_calc * (1.0 - (extra_pct / 100.0)))
+
+    def _purchase_unit_cost(self, item: dict) -> float:
+        price = item.get("price")
+        if price is not None:
+            return max(0.0, self._to_float(price, 0.0))
+        trade = item.get("trade_price")
+        if trade is not None:
+            return max(0.0, self._to_float(trade, 0.0))
+        retail = self._to_float(item.get("retail_price", 0.0), 0.0)
+        disc_pct = max(0.0, self._to_float(item.get("discount_pct", 0.0), 0.0))
+        extra_pct = max(0.0, self._to_float(item.get("extra_discount_pct", 0.0), 0.0))
+        trade_calc = retail * (1.0 - (disc_pct / 100.0))
+        return max(0.0, trade_calc * (1.0 - (extra_pct / 100.0)))
+
+    def _build_invoice_profit_map(self, docs, purchases):
+        invoices: dict[int, dict] = {}
+        events: list[tuple] = []
+
+        for t in docs or []:
+            tid = self._to_int(t.get("id", 0), 0)
+            if tid <= 0:
+                continue
+            ts = self._parse_datetime(t.get("date", ""))
+            tx_uid = self._to_int(t.get("user_id", 0), 0)
+            total_gross = max(0.0, self._to_float(t.get("total", 0.0), 0.0))
+            paid = max(0.0, self._to_float(t.get("paid", 0.0), 0.0))
+            due = max(0.0, total_gross - paid)
+
+            discount_pct = max(0.0, self._to_float(t.get("discount", 0.0), 0.0))
+            discount_factor = max(0.0, 1.0 - (discount_pct / 100.0))
+            items = list(t.get("items") or [])
+
+            prepared_lines = []
+            subtotal = 0.0
+            for idx, it in enumerate(items):
+                pid = self._to_int(it.get("id", 0), 0)
+                qty = max(0, self._to_int(it.get("quantity", 0), 0))
+                if pid <= 0 or qty <= 0:
+                    continue
+                unit_sell = self._sale_unit_price(it)
+                line_subtotal = max(0.0, unit_sell * float(qty))
+                if line_subtotal <= 0.0:
+                    continue
+                subtotal += line_subtotal
+                prepared_lines.append(
+                    {
+                        "line_index": int(idx),
+                        "product_id": int(pid),
+                        "quantity": int(qty),
+                        "unit_sell": float(unit_sell),
+                        "line_subtotal": float(line_subtotal),
+                    }
+                )
+
+            if subtotal > 1e-9:
+                revenue_net = subtotal * discount_factor
+            else:
+                # Legacy fallback when sale snapshots are missing.
+                revenue_net = total_gross
+
+            invoices[tid] = {
+                "id": tid,
+                "ts": ts,
+                "day": ts.date() if ts else None,
+                "user_id": tx_uid,
+                "gross_total": total_gross,
+                "due": due,
+                "revenue": max(0.0, float(revenue_net)),
+                "cost": 0.0,
+                "profit": 0.0,
+                "provisional_open": 0.0,
+                "provisional_qty_open": 0.0,
+            }
+
+            if prepared_lines:
+                sort_ts = ts if ts is not None else datetime.min
+                for line in prepared_lines:
+                    events.append(
+                        (
+                            sort_ts,
+                            1,  # sales consume after purchases at same timestamp
+                            tid,
+                            int(line["line_index"]),
+                            {
+                                "type": "sale",
+                                "transaction_id": tid,
+                                "product_id": int(line["product_id"]),
+                                "quantity": int(line["quantity"]),
+                            },
+                        )
+                    )
+
+        for p in purchases or []:
+            purchase_id = self._to_int(p.get("id", 0), 0)
+            if purchase_id <= 0:
+                continue
+            ts = self._parse_datetime(p.get("date", ""))
+            supplier_id = self._to_int(p.get("supplier_id", 0), 0)
+            sort_ts = ts if ts is not None else datetime.min
+            items = list(p.get("items") or [])
+            for idx, it in enumerate(items):
+                pid = self._to_int(it.get("product_id", 0), 0)
+                qty = max(0, self._to_int(it.get("quantity", 0), 0))
+                if pid <= 0 or qty <= 0:
+                    continue
+                unit_cost = self._purchase_unit_cost(it)
+                events.append(
+                    (
+                        sort_ts,
+                        0,  # purchases add stock first
+                        purchase_id,
+                        int(idx),
+                        {
+                            "type": "purchase",
+                            "product_id": int(pid),
+                            "quantity": int(qty),
+                            "unit_cost": float(unit_cost),
+                            "supplier_id": int(supplier_id),
+                            "purchase_id": int(purchase_id),
+                        },
+                    )
+                )
+
+        events.sort(key=lambda x: (x[0], x[1], x[2], x[3]))
+        lots_by_product: dict[int, deque] = defaultdict(deque)
+        pending_negative_by_product: dict[int, deque] = defaultdict(deque)
+        last_known_cost_by_product: dict[int, float] = {}
+        invoice_cost: dict[int, float] = defaultdict(float)
+        invoice_provisional_open: dict[int, float] = defaultdict(float)
+        invoice_provisional_qty_open: dict[int, float] = defaultdict(float)
+
+        for _ts, _priority, _owner, _idx, ev in events:
+            etype = str(ev.get("type", ""))
+            pid = self._to_int(ev.get("product_id", 0), 0)
+            qty = max(0, self._to_int(ev.get("quantity", 0), 0))
+            if pid <= 0 or qty <= 0:
+                continue
+
+            if etype == "purchase":
+                unit_cost = max(0.0, self._to_float(ev.get("unit_cost", 0.0), 0.0))
+                if unit_cost <= 1e-9:
+                    unit_cost = max(0.0, self._to_float(last_known_cost_by_product.get(pid, 0.0), 0.0))
+                last_known_cost_by_product[pid] = unit_cost
+
+                pendq = pending_negative_by_product[pid]
+                remaining = float(qty)
+                while remaining > 1e-9 and pendq:
+                    pending = pendq[0]
+                    take = min(float(remaining), float(pending.get("qty_remaining", 0.0) or 0.0))
+                    if take <= 1e-9:
+                        pendq.popleft()
+                        continue
+                    tx_id = self._to_int(pending.get("transaction_id", 0), 0)
+                    provisional_unit = max(0.0, self._to_float(pending.get("provisional_unit_cost", 0.0), 0.0))
+                    provisional_piece = float(take) * provisional_unit
+                    actual_piece = float(take) * unit_cost
+                    delta = actual_piece - provisional_piece
+
+                    if tx_id > 0:
+                        invoice_cost[tx_id] += float(delta)
+                        invoice_provisional_open[tx_id] -= float(provisional_piece)
+                        invoice_provisional_qty_open[tx_id] -= float(take)
+
+                    pending["qty_remaining"] = max(0.0, float(pending.get("qty_remaining", 0.0) or 0.0) - float(take))
+                    remaining -= float(take)
+                    if float(pending.get("qty_remaining", 0.0) or 0.0) <= 1e-9:
+                        pendq.popleft()
+
+                if remaining > 1e-9:
+                    lots_by_product[pid].append(
+                        {
+                            "qty_remaining": float(remaining),
+                            "unit_cost": float(unit_cost),
+                            "supplier_id": self._to_int(ev.get("supplier_id", 0), 0),
+                            "purchase_id": self._to_int(ev.get("purchase_id", 0), 0),
+                        }
+                    )
+                continue
+
+            if etype == "sale":
+                tx_id = self._to_int(ev.get("transaction_id", 0), 0)
+                if tx_id <= 0:
+                    continue
+                remaining = float(qty)
+                line_cost = 0.0
+                lotq = lots_by_product[pid]
+                while remaining > 1e-9 and lotq:
+                    lot = lotq[0]
+                    lot_qty = max(0.0, self._to_float(lot.get("qty_remaining", 0.0), 0.0))
+                    if lot_qty <= 1e-9:
+                        lotq.popleft()
+                        continue
+                    take = min(remaining, lot_qty)
+                    unit_cost = max(0.0, self._to_float(lot.get("unit_cost", 0.0), 0.0))
+                    line_cost += float(take) * unit_cost
+                    lot["qty_remaining"] = lot_qty - float(take)
+                    remaining -= float(take)
+                    if self._to_float(lot.get("qty_remaining", 0.0), 0.0) <= 1e-9:
+                        lotq.popleft()
+
+                if remaining > 1e-9:
+                    provisional_unit = max(0.0, self._to_float(last_known_cost_by_product.get(pid, 0.0), 0.0))
+                    provisional_piece = float(remaining) * provisional_unit
+                    line_cost += provisional_piece
+                    invoice_provisional_open[tx_id] += provisional_piece
+                    invoice_provisional_qty_open[tx_id] += float(remaining)
+                    pending_negative_by_product[pid].append(
+                        {
+                            "transaction_id": int(tx_id),
+                            "qty_remaining": float(remaining),
+                            "provisional_unit_cost": float(provisional_unit),
+                        }
+                    )
+
+                invoice_cost[tx_id] += float(line_cost)
+
+        for tx_id, meta in invoices.items():
+            cost_val = max(0.0, self._to_float(invoice_cost.get(tx_id, 0.0), 0.0))
+            provisional_open_val = max(0.0, self._to_float(invoice_provisional_open.get(tx_id, 0.0), 0.0))
+            provisional_qty_open_val = max(0.0, self._to_float(invoice_provisional_qty_open.get(tx_id, 0.0), 0.0))
+            revenue_val = max(0.0, self._to_float(meta.get("revenue", 0.0), 0.0))
+            meta["cost"] = cost_val
+            meta["provisional_open"] = provisional_open_val
+            meta["provisional_qty_open"] = provisional_qty_open_val
+            meta["profit"] = revenue_val - cost_val
+
+        return invoices
 
     def _load_user_lookup(self, docs):
         user_map: dict[int, str] = {}
@@ -175,9 +439,18 @@ class ReportsView(QtWidgets.QWidget):
             docs = self.api.transactions_list() or []
         except Exception:
             docs = []
+        try:
+            purchases = self.api.purchases_list() or []
+        except Exception:
+            purchases = []
+        try:
+            payments = self.api.transaction_payments_list() or []
+        except Exception:
+            payments = []
 
         self._load_user_lookup(docs)
         self._rebuild_user_filter()
+        invoice_map = self._build_invoice_profit_map(docs, purchases)
 
         try:
             start_dt = self.start.date().toPyDate()
@@ -192,18 +465,62 @@ class ReportsView(QtWidgets.QWidget):
         grouped: dict = {}
         tx_count = 0
         gross_total = 0.0
-        paid_total = 0.0
+        received_total = 0.0
         due_total = 0.0
+        cogs_total = 0.0
+        profit_total = 0.0
+        realized_profit_total = 0.0
+        provisional_total = 0.0
 
-        for t in docs:
-            try:
-                tx_uid = int(t.get("user_id", 0) or 0)
-            except Exception:
-                tx_uid = 0
+        for tx_id, inv in invoice_map.items():
+            tx_uid = self._to_int(inv.get("user_id", 0), 0)
             if uid and tx_uid != uid:
                 continue
+            day = inv.get("day")
+            if day is None:
+                continue
+            if start_dt and day < start_dt:
+                continue
+            if end_dt and day > end_dt:
+                continue
 
-            ts = self._parse_datetime(t.get("date", ""))
+            sales = max(0.0, self._to_float(inv.get("revenue", 0.0), 0.0))
+            due = max(0.0, self._to_float(inv.get("due", 0.0), 0.0))
+            cogs = max(0.0, self._to_float(inv.get("cost", 0.0), 0.0))
+            profit = self._to_float(inv.get("profit", 0.0), 0.0)
+            provisional_open = max(0.0, self._to_float(inv.get("provisional_open", 0.0), 0.0))
+            bucket = grouped.setdefault(
+                day,
+                {
+                    "count": 0,
+                    "sales": 0.0,
+                    "received": 0.0,
+                    "due": 0.0,
+                    "cogs": 0.0,
+                    "profit": 0.0,
+                    "realized": 0.0,
+                    "provisional": 0.0,
+                },
+            )
+            bucket["count"] += 1
+            bucket["sales"] += sales
+            bucket["due"] += due
+            bucket["cogs"] += cogs
+            bucket["profit"] += profit
+            bucket["provisional"] += provisional_open
+
+            tx_count += 1
+            gross_total += sales
+            due_total += due
+            cogs_total += cogs
+            profit_total += profit
+            provisional_total += provisional_open
+
+        for p in payments:
+            pay_uid = self._to_int(p.get("user_id", 0), 0)
+            if uid and pay_uid != uid:
+                continue
+            ts = self._parse_datetime(p.get("date", ""))
             if ts is None:
                 continue
             day = ts.date()
@@ -211,40 +528,48 @@ class ReportsView(QtWidgets.QWidget):
                 continue
             if end_dt and day > end_dt:
                 continue
-
             try:
-                gross = float(t.get("total", 0.0) or 0.0)
+                amount = float(p.get("amount", 0.0) or 0.0)
             except Exception:
-                gross = 0.0
-            try:
-                paid = float(t.get("paid", 0.0) or 0.0)
-            except Exception:
-                paid = 0.0
-            try:
-                discount = float(t.get("discount", 0.0) or 0.0)
-            except Exception:
-                discount = 0.0
-
-            due = max(0.0, gross - paid)
+                amount = 0.0
+            tx_id = self._to_int(p.get("transaction_id", 0), 0)
+            inv = invoice_map.get(tx_id)
+            if inv:
+                inv_gross = max(0.0, self._to_float(inv.get("gross_total", 0.0), 0.0))
+                inv_profit = self._to_float(inv.get("profit", 0.0), 0.0)
+                realized_piece = (inv_profit * (amount / inv_gross)) if inv_gross > 1e-9 else 0.0
+            else:
+                realized_piece = 0.0
             bucket = grouped.setdefault(
                 day,
-                {"count": 0, "gross": 0.0, "paid": 0.0, "due": 0.0, "discount": 0.0},
+                {
+                    "count": 0,
+                    "sales": 0.0,
+                    "received": 0.0,
+                    "due": 0.0,
+                    "cogs": 0.0,
+                    "profit": 0.0,
+                    "realized": 0.0,
+                    "provisional": 0.0,
+                },
             )
-            bucket["count"] += 1
-            bucket["gross"] += gross
-            bucket["paid"] += paid
-            bucket["due"] += due
-            bucket["discount"] += discount
-
-            tx_count += 1
-            gross_total += gross
-            paid_total += paid
-            due_total += due
+            bucket["received"] += amount
+            bucket["realized"] += realized_piece
+            received_total += amount
+            realized_profit_total += realized_piece
 
         self.tx_count_label.setText(str(tx_count))
         self.gross_label.setText(f"{gross_total:.2f}")
-        self.paid_label.setText(f"{paid_total:.2f}")
+        self.paid_label.setText(f"{received_total:.2f}")
         self.due_label.setText(f"{due_total:.2f}")
+        self.profit_label.setText(f"{profit_total:.2f}")
+        self.realized_profit_label.setText(f"{realized_profit_total:.2f}")
+        if provisional_total > 1e-9:
+            self.provisional_note.setText(
+                f"Provisional open cost in selected range: {provisional_total:.2f} (sales before purchase not fully settled)."
+            )
+        else:
+            self.provisional_note.setText("All costs in selected range are settled by purchase lots.")
 
         rows = sorted(grouped.items(), key=lambda item: item[0], reverse=True)
         self.table.setRowCount(0)
@@ -253,14 +578,17 @@ class ReportsView(QtWidgets.QWidget):
             self.table.insertRow(r)
             date_item = QtWidgets.QTableWidgetItem(day.strftime("%d-%m-%Y"))
             count_item = QtWidgets.QTableWidgetItem(str(int(data["count"])))
-            gross_item = QtWidgets.QTableWidgetItem(f"{float(data['gross']):.2f}")
-            paid_item = QtWidgets.QTableWidgetItem(f"{float(data['paid']):.2f}")
+            gross_item = QtWidgets.QTableWidgetItem(f"{float(data['sales']):.2f}")
+            paid_item = QtWidgets.QTableWidgetItem(f"{float(data['received']):.2f}")
             due_item = QtWidgets.QTableWidgetItem(f"{float(data['due']):.2f}")
-            discount_item = QtWidgets.QTableWidgetItem(f"{float(data['discount']):.2f}")
+            cogs_item = QtWidgets.QTableWidgetItem(f"{float(data['cogs']):.2f}")
+            profit_item = QtWidgets.QTableWidgetItem(f"{float(data['profit']):.2f}")
+            realized_item = QtWidgets.QTableWidgetItem(f"{float(data['realized']):.2f}")
+            provisional_item = QtWidgets.QTableWidgetItem(f"{float(data['provisional']):.2f}")
 
             date_item.setTextAlignment(QtCore.Qt.AlignCenter)
             count_item.setTextAlignment(QtCore.Qt.AlignCenter)
-            for itm in (gross_item, paid_item, due_item, discount_item):
+            for itm in (gross_item, paid_item, due_item, cogs_item, profit_item, realized_item, provisional_item):
                 itm.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
 
             self.table.setItem(r, 0, date_item)
@@ -268,4 +596,7 @@ class ReportsView(QtWidgets.QWidget):
             self.table.setItem(r, 2, gross_item)
             self.table.setItem(r, 3, paid_item)
             self.table.setItem(r, 4, due_item)
-            self.table.setItem(r, 5, discount_item)
+            self.table.setItem(r, 5, cogs_item)
+            self.table.setItem(r, 6, profit_item)
+            self.table.setItem(r, 7, realized_item)
+            self.table.setItem(r, 8, provisional_item)

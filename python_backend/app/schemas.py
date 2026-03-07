@@ -74,6 +74,7 @@ class ProductOut(BaseModel):
     trade_price: float
     purchase_discount: float
     sale_discount: float
+    is_active: bool
 
     class Config:
         from_attributes = True
@@ -114,6 +115,15 @@ class SettingOut(BaseModel):
         from_attributes = True
 
 
+class PeriodLockIn(BaseModel):
+    lock_until: Optional[str] = None
+
+
+class PeriodLockOut(BaseModel):
+    lock_until: Optional[str] = None
+    locked: bool
+
+
 # Companies, Purchases, Transactions
 class CompanyCreate(BaseModel):
     id: Optional[int] = None
@@ -121,6 +131,20 @@ class CompanyCreate(BaseModel):
 
 
 class CompanyOut(BaseModel):
+    id: int
+    name: str
+    is_active: bool
+
+    class Config:
+        from_attributes = True
+
+
+class SupplierCreate(BaseModel):
+    id: Optional[int] = None
+    name: str
+
+
+class SupplierOut(BaseModel):
     id: int
     name: str
     is_active: bool
@@ -196,6 +220,63 @@ class TransactionOut(BaseModel):
     paid: float
     discount: float
     items: list[TransactionItem]
+
+    class Config:
+        from_attributes = True
+
+
+class CustomerPaymentApplyIn(BaseModel):
+    amount: float
+    user_id: Optional[int] = 0
+    date: Optional[str] = None
+
+
+class CustomerPaymentAllocationOut(BaseModel):
+    transaction_id: int
+    amount_applied: float
+    paid_before: float
+    paid_after: float
+    due_before: float
+    due_after: float
+
+
+class CustomerPaymentApplyOut(BaseModel):
+    customer_id: int
+    total_due_before: float
+    total_applied: float
+    total_due_after: float
+    allocations: list[CustomerPaymentAllocationOut]
+
+
+class HeldSaleItem(BaseModel):
+    product_id: int
+    company_id: Optional[int] = 0
+    retail: Optional[float] = 0.0
+    pct: Optional[float] = 0.0
+    trade: Optional[float] = 0.0
+    extra: Optional[float] = 0.0
+    qty: int
+    label: Optional[str] = ""
+
+
+class HeldSaleCreate(BaseModel):
+    id: Optional[int] = None
+    name: str
+    created: Optional[str] = None
+    customer_id: Optional[int] = 0
+    discount: Optional[float] = 0.0
+    paid: Optional[float] = 0.0
+    items: list[HeldSaleItem] = []
+
+
+class HeldSaleOut(BaseModel):
+    id: int
+    name: str
+    created: str
+    customer_id: int
+    discount: float
+    paid: float
+    items: list[HeldSaleItem]
 
     class Config:
         from_attributes = True

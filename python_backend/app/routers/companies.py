@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Dict, Any
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import func
+import math
 
 from ..database import get_db, Base, engine
 from ..models import Company
@@ -20,11 +21,42 @@ def index():
 
 
 @router.get("/all", response_model=List[CompanyOut])
-def list_companies(include_inactive: bool = False, db: Session = Depends(get_db)):
-    q = db.query(Company)
+def list_companies(include_inactive: bool = False, q: str = "", db: Session = Depends(get_db)):
+    query = db.query(Company)
     if not include_inactive:
-        q = q.filter(Company.is_active == True)  # noqa: E712
-    return q.all()
+        query = query.filter(Company.is_active == True)  # noqa: E712
+    if q:
+        needle = f"%{q.strip().lower()}%"
+        query = query.filter(func.lower(Company.name).like(needle))
+    return query.all()
+
+
+@router.get("/page", response_model=Dict[str, Any])
+def list_companies_page(
+    include_inactive: bool = False,
+    q: str = "",
+    page: int = 1,
+    page_size: int = 25,
+    db: Session = Depends(get_db),
+):
+    page = max(1, int(page or 1))
+    page_size = max(1, min(int(page_size or 25), 200))
+    query = db.query(Company)
+    if not include_inactive:
+        query = query.filter(Company.is_active == True)  # noqa: E712
+    if q:
+        needle = f"%{q.strip().lower()}%"
+        query = query.filter(func.lower(Company.name).like(needle))
+    total = query.count()
+    rows = query.offset((page - 1) * page_size).limit(page_size).all()
+    items = [CompanyOut.model_validate(c).model_dump() for c in rows]
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "pages": int(math.ceil(total / float(page_size))) if page_size else 1,
+    }
 
 
 @router.post("/company", response_model=CompanyOut)

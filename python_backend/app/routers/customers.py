@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List, Dict, Any
+from sqlalchemy import func, or_
 import math
 
 from ..database import get_db, Base, engine
@@ -19,11 +20,21 @@ def index():
 
 
 @router.get("/all", response_model=List[CustomerOut])
-def list_customers(include_inactive: bool = False, db: Session = Depends(get_db)):
-    q = db.query(Customer)
+def list_customers(include_inactive: bool = False, q: str = "", db: Session = Depends(get_db)):
+    query = db.query(Customer)
     if not include_inactive:
-        q = q.filter(Customer.is_active == True)  # noqa: E712
-    return q.all()
+        query = query.filter(Customer.is_active == True)  # noqa: E712
+    if q:
+        needle = f"%{q.strip().lower()}%"
+        query = query.filter(
+            or_(
+                func.lower(Customer.name).like(needle),
+                func.lower(Customer.phone).like(needle),
+                func.lower(Customer.email).like(needle),
+                func.lower(Customer.address).like(needle),
+            )
+        )
+    return query.all()
 
 
 @router.get("/customer/{customer_id}", response_model=CustomerOut)
@@ -89,17 +100,28 @@ def delete_customer(customer_id: int, db: Session = Depends(get_db)):
 @router.get("/page", response_model=Dict[str, Any])
 def list_customers_page(
     include_inactive: bool = False,
+    q: str = "",
     page: int = 1,
     page_size: int = 25,
     db: Session = Depends(get_db),
 ):
     page = max(1, int(page or 1))
     page_size = max(1, min(int(page_size or 25), 200))
-    q = db.query(Customer)
+    query = db.query(Customer)
     if not include_inactive:
-        q = q.filter(Customer.is_active == True)  # noqa: E712
-    total = q.count()
-    rows = q.offset((page - 1) * page_size).limit(page_size).all()
+        query = query.filter(Customer.is_active == True)  # noqa: E712
+    if q:
+        needle = f"%{q.strip().lower()}%"
+        query = query.filter(
+            or_(
+                func.lower(Customer.name).like(needle),
+                func.lower(Customer.phone).like(needle),
+                func.lower(Customer.email).like(needle),
+                func.lower(Customer.address).like(needle),
+            )
+        )
+    total = query.count()
+    rows = query.offset((page - 1) * page_size).limit(page_size).all()
     items = [CustomerOut.model_validate(c).model_dump() for c in rows]
     return {
         "items": items,
