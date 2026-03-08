@@ -24,11 +24,8 @@ class UsersView(QtWidgets.QWidget):
         apply_page_layout(layout)
         header = QtWidgets.QHBoxLayout()
         apply_header_layout(header)
-        self.btn_refresh = QtWidgets.QPushButton("Refresh")
         self.btn_add = QtWidgets.QPushButton("Add User")
-        set_secondary(self.btn_refresh)
         set_accent(self.btn_add)
-        header.addWidget(self.btn_refresh)
         header.addWidget(self.btn_add)
         header.addStretch(1)
         layout.addLayout(header)
@@ -38,7 +35,6 @@ class UsersView(QtWidgets.QWidget):
         configure_table(self.table)
         layout.addWidget(self.table)
 
-        self.btn_refresh.clicked.connect(self.refresh)
         self.btn_add.clicked.connect(self.add_user_dialog)
         polish_controls(self)
 

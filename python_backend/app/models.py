@@ -81,8 +81,21 @@ class Purchase(Base):
     supplier_id = Column(Integer, default=0)
     supplier_name = Column(String(255), default="")
     total = Column(Float, default=0.0)
+    paid = Column(Float, default=0.0)
     # Use LONGTEXT on MySQL to accommodate large payloads; Text elsewhere
     items_json = Column(MYSQL_LONGTEXT if MYSQL_LONGTEXT is not None else Text, default="[]")
+
+
+class PurchasePayment(Base):
+    __tablename__ = "purchase_payments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    purchase_id = Column(Integer, index=True, nullable=False)
+    supplier_id = Column(Integer, index=True, nullable=False, default=0)
+    date = Column(String(32), default="")
+    user_id = Column(Integer, default=0)
+    amount = Column(Float, default=0.0)
+    paid_total = Column(Float, default=0.0)
 
 
 class Transaction(Base):

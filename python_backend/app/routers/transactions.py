@@ -180,7 +180,8 @@ def _recompute_payment_totals(db: Session, transaction_id: int) -> float:
     )
     running = 0.0
     for row in rows:
-        running += float(row.amount or 0.0)
+        amt = float(row.amount or 0.0)
+        running += amt
         row.paid_total = running
         db.add(row)
     return running
@@ -626,3 +627,61 @@ def delete_transaction(transaction_id: int, db: Session = Depends(get_db)):
     db.commit()
     rebuild_and_persist_cogs_allocations(db)
     return {"ok": True}
+
+@router.delete("/transaction/{transaction_id}/payment/{payment_id}", response_model=TransactionOut)
+def delete_transaction_payment(
+    transaction_id: int,
+    payment_id: int,
+    db: Session = Depends(get_db),
+):
+    t = db.query(Transaction).filter(Transaction.id == transaction_id).first()
+    if not t:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    row = (
+        db.query(TransactionPayment)
+        .filter(TransactionPayment.id == int(payment_id), TransactionPayment.transaction_id == int(transaction_id))
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Payment entry not found")
+    ensure_not_locked_for_date(db, parse_date_like(row.date or ""), "Deleting payment")
+    # Use a bulk delete to avoid any session state quirks.
+    (
+        db.query(TransactionPayment)
+        .filter(TransactionPayment.id == int(payment_id), TransactionPayment.transaction_id == int(transaction_id))
+        .delete(synchronize_session=False)
+    )
+    new_paid = _recompute_payment_totals(db, transaction_id)
+    t.paid = max(0.0, float(new_paid or 0.0))
+    db.add(t)
+    db.commit()
+    db.refresh(t)
+    return _to_dict(t)
+
+
+@router.delete("/payment/{payment_id}", response_model=TransactionOut)
+def delete_transaction_payment_by_id(
+    payment_id: int,
+    db: Session = Depends(get_db),
+):
+    """
+    Delete a payment using only its payment ID.
+
+    This is functionally equivalent to delete_transaction_payment but is
+    more convenient for clients that only know the payment row id.
+    """
+    row = db.query(TransactionPayment).filter(TransactionPayment.id == int(payment_id)).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Payment entry not found")
+    tx_id = int(row.transaction_id or 0)
+    t = db.query(Transaction).filter(Transaction.id == tx_id).first()
+    if not t:
+        raise HTTPException(status_code=404, detail="Transaction not found for payment")
+    ensure_not_locked_for_date(db, parse_date_like(row.date or ""), "Deleting payment")
+    db.query(TransactionPayment).filter(TransactionPayment.id == int(payment_id)).delete(synchronize_session=False)
+    new_paid = _recompute_payment_totals(db, tx_id)
+    t.paid = max(0.0, float(new_paid or 0.0))
+    db.add(t)
+    db.commit()
+    db.refresh(t)
+    return _to_dict(t)

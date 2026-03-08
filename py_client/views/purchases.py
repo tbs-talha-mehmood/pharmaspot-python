@@ -112,10 +112,20 @@ class PurchasesView(QtWidgets.QWidget):
         v.addLayout(btns_bar)
 
         total_bar = QtWidgets.QHBoxLayout()
+        total_bar.addWidget(QtWidgets.QLabel("Paid"))
+        self.paid_input = QtWidgets.QDoubleSpinBox()
+        self.paid_input.setDecimals(2)
+        self.paid_input.setRange(0.0, 10**12)
+        self.paid_input.setSingleStep(50.0)
+        self.paid_input.setMinimumWidth(140)
+        total_bar.addWidget(self.paid_input)
+        total_bar.addStretch(1)
         self.total_label = QtWidgets.QLabel("Total: 0.00")
         self.total_label.setObjectName("moneyStrong")
-        total_bar.addStretch(1)
         total_bar.addWidget(self.total_label)
+        self.due_label = QtWidgets.QLabel("Due: 0.00")
+        self.due_label.setObjectName("moneyStrong")
+        total_bar.addWidget(self.due_label)
         v.addLayout(total_bar)
 
         action_bar = QtWidgets.QHBoxLayout()
@@ -133,6 +143,7 @@ class PurchasesView(QtWidgets.QWidget):
         self.btn_clear.clicked.connect(self._clear_items)
         self.btn_save.clicked.connect(self._save_purchase)
         self.btn_cancel_edit.clicked.connect(self._cancel_edit)
+        self.paid_input.valueChanged.connect(self._recalc_total)
         polish_controls(parent)
         # Keyboard shortcuts similar to POS
         QtWidgets.QShortcut(QtGui.QKeySequence("F2"), self, activated=self._focus_search)
@@ -535,7 +546,17 @@ class PurchasesView(QtWidgets.QWidget):
                 total += float(self.items_table.item(r, 6).text())
             except Exception:
                 pass
+        try:
+            paid = max(0.0, float(self.paid_input.value()))
+        except Exception:
+            paid = 0.0
+        due = max(0.0, float(total) - float(paid))
         self.total_label.setText(f"Total: {total:.2f}")
+        self.due_label.setText(f"Due: {due:.2f}")
+        if due > 1e-9:
+            self.due_label.setStyleSheet("color: #F87171; font-weight: 700;")
+        else:
+            self.due_label.setStyleSheet("")
 
     def _focus_items_cell(self, row: int, col: int):
         if row is None or col is None:
@@ -594,6 +615,8 @@ class PurchasesView(QtWidgets.QWidget):
 
     def _clear_items(self):
         self.items_table.setRowCount(0)
+        if hasattr(self, "paid_input"):
+            self.paid_input.setValue(0.0)
         self._recalc_total()
 
     def _save_purchase(self):
@@ -640,6 +663,13 @@ class PurchasesView(QtWidgets.QWidget):
             QtWidgets.QMessageBox.information(self, "No Items", "Add at least one item.")
             return
         try:
+            paid = max(0.0, float(self.paid_input.value()))
+        except Exception:
+            paid = 0.0
+        if paid - total > 1e-6:
+            QtWidgets.QMessageBox.information(self, "Invalid Payment", "Paid amount cannot exceed purchase total.")
+            return
+        try:
             if sid == 0 and sname:
                 created = self.api.supplier_upsert({"name": sname})
                 if isinstance(created, dict) and created.get("detail"):
@@ -648,7 +678,13 @@ class PurchasesView(QtWidgets.QWidget):
                     sid = int((created or {}).get("id", 0) or 0)
                 except Exception:
                     sid = 0
-            payload = {"supplier_id": int(sid or 0), "supplier_name": sname, "total": total, "items": rows}
+            payload = {
+                "supplier_id": int(sid or 0),
+                "supplier_name": sname,
+                "total": total,
+                "paid": paid,
+                "items": rows,
+            }
             if getattr(self, "_edit_purchase_id", None):
                 self.api.purchase_update(int(self._edit_purchase_id), payload)
                 QtWidgets.QMessageBox.information(self, "Saved", "Purchase updated")
@@ -763,7 +799,10 @@ class PurchasesView(QtWidgets.QWidget):
         if QtWidgets.QMessageBox.question(self, "Confirm", "Delete this purchase?") != QtWidgets.QMessageBox.Yes:
             return
         try:
-            self.api.purchase_delete(pid)
+            resp = self.api.purchase_delete(pid)
+            if isinstance(resp, dict) and str(resp.get("detail", "")).strip():
+                QtWidgets.QMessageBox.information(self, "Delete blocked", str(resp.get("detail", "")).strip())
+                return
             QtWidgets.QMessageBox.information(self, "Deleted", "Purchase deleted")
             self.refresh_history()
         except Exception as e:
@@ -806,6 +845,11 @@ class PurchasesView(QtWidgets.QWidget):
                 company_id = int(prod.get("company_id", 0) or 0)
             base_price = float(trade or it.get("price", 0.0) or 0.0)
             self._add_row(pid, name, qty, retail, company_id, base_price, discount_pct, extra_pct)
+        try:
+            self.paid_input.setValue(max(0.0, float(purchase.get("paid", 0.0) or 0.0)))
+        except Exception:
+            self.paid_input.setValue(0.0)
+        self._recalc_total()
 
     def _exit_edit_mode(self):
         self._edit_purchase_id = None

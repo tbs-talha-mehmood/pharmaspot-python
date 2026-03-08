@@ -292,10 +292,8 @@ class DashboardView(QtWidgets.QWidget):
         filters.addWidget(self.end)
 
         self.btn_reset = QtWidgets.QPushButton("Reset")
-        self.btn_refresh = QtWidgets.QPushButton("Refresh")
-        set_secondary(self.btn_reset, self.btn_refresh)
+        set_secondary(self.btn_reset)
         filters.addWidget(self.btn_reset)
-        filters.addWidget(self.btn_refresh)
         filters.addStretch(1)
         root.addLayout(filters)
 
@@ -306,6 +304,7 @@ class DashboardView(QtWidgets.QWidget):
         due_card, self.due_lbl = self._metric_card("Due", "0.00")
         profit_card, self.profit_lbl = self._metric_card("Profit (Accrual)", "0.00")
         purchases_card, self.purchases_lbl = self._metric_card("Purchases", "0.00")
+        supplier_due_card, self.supplier_due_lbl = self._metric_card("Supplier Due", "0.00")
         tx_card, self.tx_lbl = self._metric_card("Transactions", "0")
         low_stock_card, self.low_stock_lbl = self._metric_card("Low Stock", "0")
         metrics.addWidget(sales_card)
@@ -313,6 +312,7 @@ class DashboardView(QtWidgets.QWidget):
         metrics.addWidget(due_card)
         metrics.addWidget(profit_card)
         metrics.addWidget(purchases_card)
+        metrics.addWidget(supplier_due_card)
         metrics.addWidget(tx_card)
         metrics.addWidget(low_stock_card)
         root.addLayout(metrics)
@@ -377,7 +377,6 @@ class DashboardView(QtWidgets.QWidget):
 
         self.start.dateChanged.connect(self.refresh)
         self.end.dateChanged.connect(self.refresh)
-        self.btn_refresh.clicked.connect(self.refresh)
         self.btn_reset.clicked.connect(self._reset_filters)
         polish_controls(self)
 
@@ -458,7 +457,19 @@ class DashboardView(QtWidgets.QWidget):
         trade_calc = retail * (1.0 - (disc_pct / 100.0))
         return max(0.0, trade_calc * (1.0 - (extra_pct / 100.0)))
 
-    def _build_invoice_profit_map(self, docs, purchases):
+    def _product_cost_hint(self, product: dict) -> float:
+        trade = max(0.0, self._to_float(product.get("trade_price", 0.0), 0.0))
+        if trade > 1e-9:
+            return trade
+        retail = max(0.0, self._to_float(product.get("price", 0.0), 0.0))
+        raw_disc = product.get("discount_pct", product.get("purchase_discount", 0.0))
+        disc = max(0.0, self._to_float(raw_disc, 0.0))
+        if retail > 1e-9:
+            return max(0.0, retail * (1.0 - (disc / 100.0)))
+        return 0.0
+
+    def _build_invoice_profit_map(self, docs, purchases, product_cost_hint_by_id: dict[int, float] | None = None):
+        product_cost_hint_by_id = dict(product_cost_hint_by_id or {})
         invoices: dict[int, dict] = {}
         events: list[tuple] = []
 
@@ -486,7 +497,8 @@ class DashboardView(QtWidgets.QWidget):
                 if line_subtotal <= 0.0:
                     continue
                 subtotal += line_subtotal
-                prepared_lines.append((int(idx), int(pid), int(qty)))
+                fallback_unit_cost = max(0.0, self._to_float(product_cost_hint_by_id.get(int(pid), 0.0), 0.0))
+                prepared_lines.append((int(idx), int(pid), int(qty), float(fallback_unit_cost)))
 
             revenue_net = (subtotal * discount_factor) if subtotal > 1e-9 else total_gross
             invoices[tid] = {
@@ -501,7 +513,7 @@ class DashboardView(QtWidgets.QWidget):
 
             if prepared_lines:
                 sort_ts = ts if ts is not None else datetime.min
-                for idx, pid, qty in prepared_lines:
+                for idx, pid, qty, fallback_unit_cost in prepared_lines:
                     events.append(
                         (
                             sort_ts,
@@ -513,6 +525,7 @@ class DashboardView(QtWidgets.QWidget):
                                 "transaction_id": tid,
                                 "product_id": pid,
                                 "quantity": qty,
+                                "fallback_unit_cost": float(fallback_unit_cost),
                             },
                         )
                     )
@@ -592,6 +605,7 @@ class DashboardView(QtWidgets.QWidget):
                 tx_id = self._to_int(ev.get("transaction_id", 0), 0)
                 if tx_id <= 0:
                     continue
+                fallback_unit_cost = max(0.0, self._to_float(ev.get("fallback_unit_cost", 0.0), 0.0))
                 remaining = float(qty)
                 line_cost = 0.0
                 lotq = lots_by_product[pid]
@@ -610,6 +624,8 @@ class DashboardView(QtWidgets.QWidget):
                         lotq.popleft()
                 if remaining > 1e-9:
                     provisional_unit = max(0.0, self._to_float(last_known_cost_by_product.get(pid, 0.0), 0.0))
+                    if provisional_unit <= 1e-9:
+                        provisional_unit = fallback_unit_cost
                     line_cost += float(remaining) * provisional_unit
                     pending_negative_by_product[pid].append(
                         {
@@ -662,6 +678,7 @@ class DashboardView(QtWidgets.QWidget):
         due_total = 0.0
         profit_total = 0.0
         purchases_total = 0.0
+        supplier_due_total = 0.0
         cash_total = 0.0
         tx_count = 0
 
@@ -673,7 +690,20 @@ class DashboardView(QtWidgets.QWidget):
         sold_qty_by_product = defaultdict(float)
         product_name_by_id: dict[int, str] = {}
 
-        invoice_map = self._build_invoice_profit_map(transactions, purchases)
+        product_cost_hint_by_id: dict[int, float] = {}
+        for p in products or []:
+            pid = self._to_int(p.get("id", 0), 0)
+            if pid <= 0:
+                continue
+            hint = max(0.0, self._to_float(self._product_cost_hint(p), 0.0))
+            if hint > 1e-9:
+                product_cost_hint_by_id[pid] = float(hint)
+
+        invoice_map = self._build_invoice_profit_map(
+            transactions,
+            purchases,
+            product_cost_hint_by_id=product_cost_hint_by_id,
+        )
 
         for p in products or []:
             pid = self._to_int(p.get("id", 0), 0)
@@ -710,6 +740,11 @@ class DashboardView(QtWidgets.QWidget):
             profit_by_day[day] += pval
 
         for pc in purchases or []:
+            supplier_due_total += max(
+                0.0,
+                max(0.0, self._to_float(pc.get("total", 0.0), 0.0))
+                - max(0.0, self._to_float(pc.get("paid", 0.0), 0.0)),
+            )
             pdt = self._parse_datetime(pc.get("date", ""))
             day = pdt.date() if pdt else None
             if not in_range(day):
@@ -819,9 +854,11 @@ class DashboardView(QtWidgets.QWidget):
         self.due_lbl.setText(f"{due_total:.2f}")
         self.profit_lbl.setText(f"{profit_total:.2f}")
         self.purchases_lbl.setText(f"{purchases_total:.2f}")
+        self.supplier_due_lbl.setText(f"{supplier_due_total:.2f}")
         self.tx_lbl.setText(str(int(tx_count)))
         self.low_stock_lbl.setText(str(int(len(low_rows))))
         self.status_note.setText(
             f"Range: {start_dt.isoformat()} to {end_dt.isoformat()} | "
-            f"Sales {sales_total:.2f} | Cash {cash_total:.2f} | Due {due_total:.2f} | Profit {profit_total:.2f}"
+            f"Sales {sales_total:.2f} | Cash {cash_total:.2f} | Due {due_total:.2f} | "
+            f"Supplier Due {supplier_due_total:.2f} | Profit {profit_total:.2f}"
         )

@@ -6,12 +6,14 @@ from datetime import datetime, date
 from typing import Optional, Any
 
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
 from ..models import (
     Purchase,
     Transaction,
     TransactionCOGSAllocation,
     Product,
+    Company,
 )
 
 
@@ -82,6 +84,20 @@ def _purchase_unit_cost(item: dict) -> float:
     return max(0.0, trade_calc * (1.0 - (extra_pct / 100.0)))
 
 
+def _product_cost_hint(prod: Product) -> float:
+    # Prefer explicit purchase-like unit cost snapshots first.
+    for key in ("trade_price",):
+        val = _to_float(getattr(prod, key, 0.0), 0.0)
+        if val > 1e-9:
+            return float(val)
+    # Fallback: infer from retail + discount metadata.
+    retail = _to_float(getattr(prod, "price", 0.0), 0.0)
+    disc = _to_float(getattr(prod, "discount_pct", 0.0), 0.0)
+    if retail > 1e-9:
+        return max(0.0, retail * (1.0 - (max(0.0, disc) / 100.0)))
+    return 0.0
+
+
 def _parse_json_array(raw_json: str) -> list[dict]:
     try:
         arr = json.loads(raw_json or "[]")
@@ -94,7 +110,20 @@ def _parse_json_array(raw_json: str) -> list[dict]:
     return out
 
 
-def _build_allocation_rows(purchases: list[Purchase], transactions: list[Transaction]) -> list[dict]:
+def _build_allocation_rows(
+    purchases: list[Purchase],
+    transactions: list[Transaction],
+    products: list[Product] | None = None,
+) -> list[dict]:
+    product_cost_hint_by_id: dict[int, float] = {}
+    for p in products or []:
+        pid = _to_int(getattr(p, "id", 0), 0)
+        if pid <= 0:
+            continue
+        hint = max(0.0, _to_float(_product_cost_hint(p), 0.0))
+        if hint > 1e-9:
+            product_cost_hint_by_id[pid] = float(hint)
+
     events: list[tuple] = []
 
     for p in purchases or []:
@@ -137,6 +166,7 @@ def _build_allocation_rows(purchases: list[Purchase], transactions: list[Transac
             if pid <= 0 or qty <= 0:
                 continue
             unit_sale = _sale_unit_price(it) * discount_factor
+            fallback_unit_cost = max(0.0, _to_float(product_cost_hint_by_id.get(int(pid), 0.0), 0.0))
             events.append(
                 (
                     sort_dt,
@@ -152,6 +182,7 @@ def _build_allocation_rows(purchases: list[Purchase], transactions: list[Transac
                         "product_id": int(pid),
                         "quantity": int(qty),
                         "unit_sale": float(unit_sale),
+                        "fallback_unit_cost": float(fallback_unit_cost),
                     },
                 )
             )
@@ -229,6 +260,7 @@ def _build_allocation_rows(purchases: list[Purchase], transactions: list[Transac
             tx_date_txt = str(ev.get("transaction_date", "") or "")
             tx_user_id = _to_int(ev.get("user_id", 0), 0)
             unit_sale = max(0.0, _to_float(ev.get("unit_sale", 0.0), 0.0))
+            fallback_unit_cost = max(0.0, _to_float(ev.get("fallback_unit_cost", 0.0), 0.0))
             remaining = float(qty)
             lots = available_lots[pid]
             while remaining > 1e-9 and lots:
@@ -267,6 +299,8 @@ def _build_allocation_rows(purchases: list[Purchase], transactions: list[Transac
 
             if remaining > 1e-9:
                 provisional_unit = max(0.0, _to_float(last_known_cost.get(pid, 0.0), 0.0))
+                if provisional_unit <= 1e-9:
+                    provisional_unit = fallback_unit_cost
                 pending_negative[pid].append(
                     {
                         "transaction_id": int(tx_id),
@@ -315,7 +349,8 @@ def _build_allocation_rows(purchases: list[Purchase], transactions: list[Transac
 def rebuild_and_persist_cogs_allocations(db: Session) -> dict[str, int]:
     purchases = list(db.query(Purchase).all())
     transactions = list(db.query(Transaction).all())
-    rows = _build_allocation_rows(purchases, transactions)
+    products = list(db.query(Product).all())
+    rows = _build_allocation_rows(purchases, transactions, products=products)
     db.query(TransactionCOGSAllocation).delete(synchronize_session=False)
     for r in rows:
         db.add(TransactionCOGSAllocation(**r))
@@ -536,3 +571,102 @@ def build_profit_reconciliation(
         "summary": summary,
         "items": items,
     }
+
+
+def build_company_inventory_snapshot(
+    db: Session,
+    include_inactive: bool = False,
+    q: str = "",
+) -> dict:
+    query = db.query(Company)
+    if not include_inactive:
+        query = query.filter(Company.is_active == True)  # noqa: E712
+    needle = str(q or "").strip().lower()
+    if needle:
+        query = query.filter(func.lower(Company.name).like(f"%{needle}%"))
+    companies = list(query.all())
+
+    company_ids = [int(c.id or 0) for c in companies if int(c.id or 0) > 0]
+    if not company_ids:
+        return {
+            "items": [],
+            "summary": {
+                "total_companies": 0,
+                "total_products": 0,
+                "total_quantity": 0.0,
+                "total_value": 0.0,
+            },
+        }
+
+    prod_q = db.query(Product).filter(Product.company_id.in_(company_ids))
+    if not include_inactive:
+        prod_q = prod_q.filter(Product.is_active == True)  # noqa: E712
+    products = list(prod_q.all())
+
+    # Use reconciliation closing valuation when available (captures mixed purchase costs),
+    # otherwise fallback to product-level cost hint.
+    rec = build_profit_reconciliation(db, start_date="", end_date="", user_id=0)
+    closing_by_pid: dict[int, tuple[float, float]] = {}
+    for row in list(rec.get("items") or []):
+        pid = _to_int(row.get("product_id", 0), 0)
+        if pid <= 0:
+            continue
+        cqty = max(0.0, _to_float(row.get("closing_qty", 0.0), 0.0))
+        cval = max(0.0, _to_float(row.get("closing_value", 0.0), 0.0))
+        closing_by_pid[pid] = (cqty, cval)
+
+    agg: dict[int, dict] = defaultdict(
+        lambda: {
+            "company_id": 0,
+            "company_name": "",
+            "product_count": 0,
+            "quantity": 0.0,
+            "inventory_value": 0.0,
+        }
+    )
+    company_name_by_id = {int(c.id or 0): str(c.name or "") for c in companies}
+
+    for p in products:
+        pid = _to_int(getattr(p, "id", 0), 0)
+        cid = _to_int(getattr(p, "company_id", 0), 0)
+        if pid <= 0 or cid <= 0:
+            continue
+        qty = max(0.0, _to_float(getattr(p, "quantity", 0), 0.0))
+        cost_hint = max(0.0, _to_float(_product_cost_hint(p), 0.0))
+        closing_qty, closing_val = closing_by_pid.get(pid, (0.0, 0.0))
+        avg_cost = 0.0
+        if closing_qty > 1e-9 and closing_val >= 0.0:
+            avg_cost = max(0.0, closing_val / closing_qty)
+        if avg_cost <= 1e-9:
+            avg_cost = cost_hint
+        inv_val = max(0.0, qty * avg_cost)
+
+        slot = agg[cid]
+        slot["company_id"] = int(cid)
+        slot["company_name"] = company_name_by_id.get(int(cid), f"ID {int(cid)}")
+        slot["product_count"] = int(slot["product_count"]) + 1
+        slot["quantity"] = float(slot["quantity"]) + float(qty)
+        slot["inventory_value"] = float(slot["inventory_value"]) + float(inv_val)
+
+    items: list[dict] = []
+    for c in companies:
+        cid = _to_int(getattr(c, "id", 0), 0)
+        slot = dict(agg.get(cid) or {})
+        items.append(
+            {
+                "company_id": int(cid),
+                "company_name": str(getattr(c, "name", "") or ""),
+                "product_count": int(slot.get("product_count", 0) or 0),
+                "quantity": float(slot.get("quantity", 0.0) or 0.0),
+                "inventory_value": float(slot.get("inventory_value", 0.0) or 0.0),
+            }
+        )
+
+    items.sort(key=lambda x: (-float(x.get("inventory_value", 0.0) or 0.0), str(x.get("company_name", "")).lower()))
+    summary = {
+        "total_companies": int(len(items)),
+        "total_products": int(sum(int(i.get("product_count", 0) or 0) for i in items)),
+        "total_quantity": float(sum(float(i.get("quantity", 0.0) or 0.0) for i in items)),
+        "total_value": float(sum(float(i.get("inventory_value", 0.0) or 0.0) for i in items)),
+    }
+    return {"items": items, "summary": summary}

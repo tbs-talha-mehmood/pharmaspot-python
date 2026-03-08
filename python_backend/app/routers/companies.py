@@ -72,7 +72,7 @@ def upsert_company(c: CompanyCreate, db: Session = Depends(get_db)):
             if conflict:
                 raise HTTPException(status_code=400, detail="Company name already exists")
             existing.name = name
-            if existing.is_active is None:
+            if existing.is_active is None or not bool(existing.is_active):
                 existing.is_active = True
             db.add(existing)
             try:

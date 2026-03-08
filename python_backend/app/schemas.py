@@ -170,6 +170,7 @@ class PurchaseCreate(BaseModel):
     supplier_id: Optional[int] = 0
     supplier_name: Optional[str] = ""
     total: Optional[float] = 0.0
+    paid: Optional[float] = None
     items: list[PurchaseItem] = []
 
 
@@ -179,6 +180,8 @@ class PurchaseOut(BaseModel):
     supplier_id: int
     supplier_name: str
     total: float
+    paid: float
+    due: float
     items: list[PurchaseItem]
 
     class Config:
@@ -296,3 +299,39 @@ class TransactionPaymentOut(BaseModel):
 
 class TransactionPaymentEditIn(BaseModel):
     amount: float
+
+
+class PurchasePaymentOut(BaseModel):
+    id: int
+    purchase_id: int
+    supplier_id: int
+    date: str
+    user_id: int
+    amount: float
+    paid_total: float
+
+    class Config:
+        from_attributes = True
+
+
+class SupplierPaymentApplyIn(BaseModel):
+    amount: float
+    user_id: Optional[int] = 0
+    date: Optional[str] = None
+
+
+class SupplierPaymentAllocationOut(BaseModel):
+    purchase_id: int
+    amount_applied: float
+    paid_before: float
+    paid_after: float
+    due_before: float
+    due_after: float
+
+
+class SupplierPaymentApplyOut(BaseModel):
+    supplier_id: int
+    total_due_before: float
+    total_applied: float
+    total_due_after: float
+    allocations: list[SupplierPaymentAllocationOut]

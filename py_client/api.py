@@ -135,12 +135,19 @@ class ApiClient:
         return requests.delete(self.base_url + f"/api/companies/company/{cid}").json()
 
     # Suppliers
-    def suppliers(self, include_inactive: bool = False):
-        suffix = "?include_inactive=true" if include_inactive else ""
+    def suppliers(self, include_inactive: bool = False, q: str = ""):
+        params = []
+        if include_inactive:
+            params.append("include_inactive=true")
+        if q:
+            params.append(f"q={q}")
+        suffix = f"?{'&'.join(params)}" if params else ""
         return self.get(f"/api/suppliers/all{suffix}").json()
 
-    def suppliers_page(self, include_inactive: bool = False, page: int = 1, page_size: int = 25):
+    def suppliers_page(self, include_inactive: bool = False, q: str = "", page: int = 1, page_size: int = 25):
         params = [f"page={int(page)}", f"page_size={int(page_size)}"]
+        if q:
+            params.append(f"q={q}")
         if include_inactive:
             params.append("include_inactive=true")
         suffix = f"?{'&'.join(params)}"
@@ -175,6 +182,24 @@ class ApiClient:
 
     def purchase_delete(self, purchase_id: int):
         return requests.delete(self.base_url + f"/api/purchases/purchase/{int(purchase_id)}").json()
+
+    def purchase_payments_list(self):
+        return self.get("/api/purchases/payments").json()
+
+    def purchase_payments(self, purchase_id: int):
+        return self.get(f"/api/purchases/purchase/{int(purchase_id)}/payments").json()
+
+    def supplier_purchases(self, supplier_id: int):
+        return self.get(f"/api/purchases/supplier/{int(supplier_id)}/invoices").json()
+
+    def supplier_payments(self, supplier_id: int):
+        return self.get(f"/api/purchases/supplier/{int(supplier_id)}/payments").json()
+
+    def supplier_payment_apply(self, supplier_id: int, amount: float, user_id: int = 0, date: str | None = None):
+        payload = {"amount": float(amount), "user_id": int(user_id or 0)}
+        if date:
+            payload["date"] = str(date)
+        return self.post_json(f"/api/purchases/supplier/{int(supplier_id)}/payment", payload).json()
 
     # Held Sales
     def held_sales_list(self):
@@ -240,3 +265,40 @@ class ApiClient:
 
     def transaction_delete(self, tid: int):
         return requests.delete(self.base_url + f"/api/transactions/transaction/{int(tid)}").json()
+
+    # Reports
+    def profit_reconciliation(self, start_date: str = "", end_date: str = "", user_id: int = 0):
+        params = []
+        if start_date:
+            params.append(f"start_date={start_date}")
+        if end_date:
+            params.append(f"end_date={end_date}")
+        if int(user_id or 0) > 0:
+            params.append(f"user_id={int(user_id)}")
+        suffix = f"?{'&'.join(params)}" if params else ""
+        return self.get(f"/api/reports/profit_reconciliation{suffix}").json()
+
+    def company_inventory(self, include_inactive: bool = False, q: str = ""):
+        params = []
+        if include_inactive:
+            params.append("include_inactive=true")
+        if q:
+            params.append(f"q={q}")
+        suffix = f"?{'&'.join(params)}" if params else ""
+        return self.get(f"/api/reports/company_inventory{suffix}").json()
+
+
+    def purchase_payment_update(self, purchase_id: int, payment_id: int, amount: float):
+        return requests.put(
+            self.base_url + f"/api/purchases/purchase/{int(purchase_id)}/payment/{int(payment_id)}",
+            json={"amount": float(amount)},
+        ).json()
+
+    def transaction_payment_delete(self, tid: int, payment_id: int):
+        # Prefer the ID-only endpoint on the backend; tid is ignored but
+        # kept for backwards compatibility with existing callers.
+        return requests.delete(self.base_url + f"/api/transactions/payment/{int(payment_id)}").json()
+
+    def purchase_payment_delete(self, purchase_id: int, payment_id: int):
+        # Prefer the ID-only endpoint for symmetry with transaction payments.
+        return requests.delete(self.base_url + f"/api/purchases/payment/{int(payment_id)}").json()

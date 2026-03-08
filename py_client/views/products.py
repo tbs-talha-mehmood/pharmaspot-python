@@ -87,6 +87,8 @@ class ProductsView(QtWidgets.QWidget):
         self._page = 1
         self._pages = 1
         polish_controls(self)
+        self.table.itemSelectionChanged.connect(self._sync_action_state)
+        self._sync_action_state()
 
     def focus_search(self):
         self.search.setFocus(QtCore.Qt.OtherFocusReason)
@@ -96,6 +98,23 @@ class ProductsView(QtWidgets.QWidget):
         if obj is self.search and event.type() == QtCore.QEvent.FocusIn:
             QtCore.QTimer.singleShot(0, self.search.selectAll)
         return super().eventFilter(obj, event)
+
+    def _sync_action_state(self):
+        existing = self._selected_product()
+        has_sel = existing is not None
+        is_active = bool((existing or {}).get("is_active", True))
+        self.btn_edit.setEnabled(has_sel)
+        self.btn_delete.setEnabled(has_sel)
+        self.btn_delete.setText("Reactivate" if (has_sel and not is_active) else "Deactivate")
+        if has_sel and not is_active:
+            self.btn_delete.setProperty("danger", False)
+            self.btn_delete.setProperty("accent", True)
+        else:
+            self.btn_delete.setProperty("accent", False)
+            self.btn_delete.setProperty("danger", True)
+        self.btn_delete.style().unpolish(self.btn_delete)
+        self.btn_delete.style().polish(self.btn_delete)
+        self.btn_delete.update()
 
     def _on_search_changed(self):
         self._search_timer.stop()
@@ -144,6 +163,7 @@ class ProductsView(QtWidgets.QWidget):
         self.page_label.setText(f"Page {self._page} / {self._pages}")
         self.btn_prev.setEnabled(self._page > 1)
         self.btn_next.setEnabled(self._page < self._pages)
+        self._sync_action_state()
 
     def _prev_page(self):
         if self._page > 1:
@@ -259,10 +279,32 @@ class ProductsView(QtWidgets.QWidget):
         if not existing:
             QtWidgets.QMessageBox.information(self, "Select", "Select a product row first")
             return
-        if QtWidgets.QMessageBox.question(self, "Confirm", "Deactivate this product?") != QtWidgets.QMessageBox.Yes:
-            return
+        is_active = bool(existing.get("is_active", True))
         try:
-            self.api.product_delete(int(existing.get("id")))
+            if is_active:
+                if QtWidgets.QMessageBox.question(self, "Confirm", "Deactivate this product?") != QtWidgets.QMessageBox.Yes:
+                    return
+                self.api.product_delete(int(existing.get("id")))
+                QtWidgets.QMessageBox.information(self, "Deactivated", "Product has been deactivated.")
+            else:
+                if QtWidgets.QMessageBox.question(self, "Confirm", "Reactivate this product?") != QtWidgets.QMessageBox.Yes:
+                    return
+                payload = {
+                    "id": int(existing.get("id")),
+                    "name": str(existing.get("name", "") or ""),
+                    "price": float(existing.get("price", 0.0) or 0.0),
+                    "company_id": int(existing.get("company_id", 0) or 0),
+                    "quantity": int(existing.get("quantity", 0) or 0),
+                    "expirationDate": str(existing.get("expirationDate", "") or ""),
+                    "img": str(existing.get("img", "") or ""),
+                    "discount_pct": float(existing.get("discount_pct", 0.0) or 0.0),
+                    "trade_price": float(existing.get("trade_price", 0.0) or 0.0),
+                }
+                resp = self.api.product_upsert(payload)
+                if isinstance(resp, dict) and resp.get("detail") and not resp.get("id"):
+                    QtWidgets.QMessageBox.warning(self, "Error", str(resp.get("detail")))
+                    return
+                QtWidgets.QMessageBox.information(self, "Reactivated", "Product has been reactivated.")
             self.refresh()
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Error", str(e))
@@ -297,3 +339,8 @@ class ProductsView(QtWidgets.QWidget):
             "price": price.value(),
             "company_id": company_id,
         }
+
+
+
+
+

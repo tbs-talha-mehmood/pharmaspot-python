@@ -110,7 +110,7 @@ def upsert_product(payload: ProductCreate, db: Session = Depends(get_db)):
         if not prod:
             prod = Product(id=int(payload.id), is_active=True)
             db.add(prod)
-        elif prod.is_active is None:
+        elif prod.is_active is None or not bool(prod.is_active):
             prod.is_active = True
     else:
         prod = Product(is_active=True)

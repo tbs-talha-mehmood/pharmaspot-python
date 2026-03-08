@@ -29,7 +29,7 @@ class CompaniesView(QtWidgets.QWidget):
         self.chk_inactive = QtWidgets.QCheckBox("Show inactive")
         self.btn_add = QtWidgets.QPushButton("Add Company")
         self.btn_edit = QtWidgets.QPushButton("Edit")
-        self.btn_delete = QtWidgets.QPushButton("Delete")
+        self.btn_delete = QtWidgets.QPushButton("Deactivate")
         set_secondary(self.btn_edit)
         set_accent(self.btn_add)
         set_danger(self.btn_delete)
@@ -46,11 +46,13 @@ class CompaniesView(QtWidgets.QWidget):
         header.addWidget(self.search)
         layout.addLayout(header)
 
-        self.table = QtWidgets.QTableWidget(0, 2)
-        self.table.setHorizontalHeaderLabels(["ID", "Name"])
-        configure_table(self.table)
+        self.table = QtWidgets.QTableWidget(0, 3)
+        self.table.setHorizontalHeaderLabels(["ID", "Name", "Inventory (Cost)"])
+        configure_table(self.table, stretch_last=False)
         hdr = self.table.horizontalHeader()
-        hdr.setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
+        hdr.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(1, QtWidgets.QHeaderView.Stretch)
+        hdr.setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeToContents)
         layout.addWidget(self.table)
 
         pager = QtWidgets.QHBoxLayout()
@@ -63,6 +65,9 @@ class CompaniesView(QtWidgets.QWidget):
         pager.addWidget(self.btn_next)
         pager.addWidget(self.page_label)
         pager.addStretch(1)
+        self.investment_label = QtWidgets.QLabel("Realtime Inventory Investment: 0.00")
+        self.investment_label.setObjectName("moneyStrong")
+        pager.addWidget(self.investment_label)
         layout.addLayout(pager)
 
         self.btn_add.clicked.connect(self.add_dialog)
@@ -77,6 +82,8 @@ class CompaniesView(QtWidgets.QWidget):
         self._search_timer.timeout.connect(self.refresh)
         self.search.textChanged.connect(self._on_search_changed)
         polish_controls(self)
+        self.table.itemSelectionChanged.connect(self._sync_action_state)
+        self._sync_action_state()
 
     def focus_search(self):
         self.search.setFocus(QtCore.Qt.OtherFocusReason)
@@ -87,6 +94,22 @@ class CompaniesView(QtWidgets.QWidget):
             QtCore.QTimer.singleShot(0, self.search.selectAll)
         return super().eventFilter(obj, event)
 
+    def _sync_action_state(self):
+        selected = self._selected_company()
+        has_sel = selected is not None
+        is_active = bool((selected or {}).get("is_active", True))
+        self.btn_edit.setEnabled(has_sel)
+        self.btn_delete.setEnabled(has_sel)
+        self.btn_delete.setText("Reactivate" if (has_sel and not is_active) else "Deactivate")
+        if has_sel and not is_active:
+            self.btn_delete.setProperty("danger", False)
+            self.btn_delete.setProperty("accent", True)
+        else:
+            self.btn_delete.setProperty("accent", False)
+            self.btn_delete.setProperty("danger", True)
+        self.btn_delete.style().unpolish(self.btn_delete)
+        self.btn_delete.style().polish(self.btn_delete)
+        self.btn_delete.update()
     def _on_search_changed(self):
         self._search_timer.stop()
         if len(self.search.text().strip()) >= 3:
@@ -120,18 +143,36 @@ class CompaniesView(QtWidgets.QWidget):
             items = data.get("items", [])
             self._pages = int(data.get("pages", 1) or 1)
             self._page = max(1, min(int(data.get("page", self._page) or self._page), self._pages))
+            inv_data = self.api.company_inventory(
+                include_inactive=self.chk_inactive.isChecked(),
+                q=self.search.text().strip(),
+            )
+            inv_rows = list((inv_data or {}).get("items") or [])
+            inv_map = {int(r.get("company_id", 0) or 0): r for r in inv_rows}
+            total_val = float(((inv_data or {}).get("summary") or {}).get("total_value", 0.0) or 0.0)
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Error", str(e))
             return
         self.table.setRowCount(0)
         for c in items or []:
+            cid = int(c.get("id", 0) or 0)
+            inv = dict(inv_map.get(cid) or {})
+            val = float(inv.get("inventory_value", 0.0) or 0.0)
             r = self.table.rowCount()
             self.table.insertRow(r)
-            self.table.setItem(r, 0, QtWidgets.QTableWidgetItem(str(c.get("id"))))
-            self.table.setItem(r, 1, QtWidgets.QTableWidgetItem(c.get("name", "")))
+            id_item = QtWidgets.QTableWidgetItem(str(cid))
+            id_item.setData(QtCore.Qt.UserRole, dict(c) if isinstance(c, dict) else {})
+            self.table.setItem(r, 0, id_item)
+            name_item = QtWidgets.QTableWidgetItem(c.get("name", ""))
+            self.table.setItem(r, 1, name_item)
+            val_item = QtWidgets.QTableWidgetItem(f"{val:.2f}")
+            val_item.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
+            self.table.setItem(r, 2, val_item)
         self.page_label.setText(f"Page {self._page} / {self._pages}")
+        self.investment_label.setText(f"Realtime Inventory Investment: {total_val:.2f}")
         self.btn_prev.setEnabled(self._page > 1)
         self.btn_next.setEnabled(self._page < self._pages)
+        self._sync_action_state()
 
     def add_dialog(self):
         d = QtWidgets.QDialog(self)
@@ -170,6 +211,13 @@ class CompaniesView(QtWidgets.QWidget):
             cid = int(cid_item.text())
         except Exception:
             return None
+        meta = cid_item.data(QtCore.Qt.UserRole)
+        if isinstance(meta, dict):
+            try:
+                mid = int(meta.get("id", cid) or cid)
+            except Exception:
+                mid = cid
+            return {"id": mid, "name": str(meta.get("name", name_item.text() or "")), "is_active": bool(meta.get("is_active", True))}
         return {"id": cid, "name": name_item.text()}
 
     def edit_selected(self):
@@ -206,10 +254,29 @@ class CompaniesView(QtWidgets.QWidget):
         if not selected:
             QtWidgets.QMessageBox.information(self, "Select", "Select a company row first")
             return
-        if QtWidgets.QMessageBox.question(self, "Confirm", "Delete this company?") != QtWidgets.QMessageBox.Yes:
-            return
+        is_active = bool(selected.get("is_active", True))
         try:
-            self.api.company_delete(int(selected["id"]))
+            if is_active:
+                if QtWidgets.QMessageBox.question(self, "Confirm", "Deactivate this company?") != QtWidgets.QMessageBox.Yes:
+                    return
+                self.api.company_delete(int(selected["id"]))
+                QtWidgets.QMessageBox.information(self, "Deactivated", "Company has been deactivated.")
+            else:
+                if QtWidgets.QMessageBox.question(self, "Confirm", "Reactivate this company?") != QtWidgets.QMessageBox.Yes:
+                    return
+                payload = {"id": int(selected["id"]), "name": str(selected.get("name", "") or "")}
+                resp = self.api.company_upsert(payload)
+                if isinstance(resp, dict) and resp.get("detail"):
+                    QtWidgets.QMessageBox.warning(self, "Error", str(resp.get("detail")))
+                    return
+                QtWidgets.QMessageBox.information(self, "Reactivated", "Company has been reactivated.")
             self.refresh()
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Error", str(e))
+
+
+
+
+
+
+

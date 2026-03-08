@@ -4,7 +4,7 @@ from sqlalchemy import inspect, text
 from .database import Base, engine, SessionLocal
 from .routers import users, products
 from .routers import customers, settings
-from .routers import companies, suppliers, purchases, transactions
+from .routers import companies, suppliers, purchases, transactions, reports
 from .routers import held_sales
 from .services.cogs import rebuild_and_persist_cogs_allocations
 
@@ -26,6 +26,7 @@ def create_app() -> FastAPI:
     app.include_router(purchases.router)
     app.include_router(transactions.router)
     app.include_router(held_sales.router)
+    app.include_router(reports.router)
 
     @app.get("/")
     def root():
@@ -63,6 +64,14 @@ def _ensure_schema_updates() -> None:
                         conn.execute(text("ALTER TABLE transactions DROP COLUMN profit"))
                 except Exception:
                     # Some DBs or versions may not support DROP COLUMN; keep startup resilient.
+                    pass
+        if "purchases" in tables:
+            purchase_cols = {c.get("name") for c in insp.get_columns("purchases")}
+            if "paid" not in purchase_cols:
+                try:
+                    with engine.begin() as conn:
+                        conn.execute(text("ALTER TABLE purchases ADD COLUMN paid FLOAT DEFAULT 0"))
+                except Exception:
                     pass
     except Exception:
         # Keep startup resilient if DB user lacks ALTER permission.

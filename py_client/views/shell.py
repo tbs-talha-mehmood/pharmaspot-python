@@ -6,6 +6,7 @@ from .customers import CustomersView
 from .settings import SettingsView
 from .dashboard import DashboardView
 from .purchases import PurchasesView
+from .suppliers import SuppliersView
 from .transactions import TransactionsView
 from .reports import ReportsView
 
@@ -35,6 +36,7 @@ class ShellView(QtWidgets.QWidget):
         self.pos = POSView(self.api)
         self.products = ProductsView(self.api)
         self.companies = CompaniesView(self.api)
+        self.suppliers = SuppliersView(self.api)
         self.customers = CustomersView(self.api)
         self.settings = SettingsView(self.api)
         self.purchases = PurchasesView(self.api)
@@ -51,6 +53,7 @@ class ShellView(QtWidgets.QWidget):
             ("Point of Sale", self.pos),
             ("Products", self.products),
             ("Companies", self.companies),
+            ("Suppliers", self.suppliers),
             ("Customers", self.customers),
             ("Purchases", self.purchases),
             ("Transactions", self.transactions),
@@ -87,6 +90,8 @@ class ShellView(QtWidgets.QWidget):
                     QtCore.QTimer.singleShot(0, widget.focus_search)
                 if widget is self.customers and hasattr(widget, "focus_search"):
                     QtCore.QTimer.singleShot(0, widget.focus_search)
+                if widget is self.suppliers and hasattr(widget, "focus_search"):
+                    QtCore.QTimer.singleShot(0, widget.focus_search)
                 if widget is self.pos and hasattr(widget, "_focus_search"):
                     QtCore.QTimer.singleShot(0, widget._focus_search)
             except Exception:
@@ -105,6 +110,7 @@ class ShellView(QtWidgets.QWidget):
         _set_nav_visible("Products", bool(user.get("perm_products", False)))
         _set_nav_visible("Dashboard", True)
         _set_nav_visible("Companies", True)
+        _set_nav_visible("Suppliers", True)
         _set_nav_visible("Customers", True)
         _set_nav_visible("Purchases", True)
         _set_nav_visible("Transactions", True)
@@ -117,5 +123,7 @@ class ShellView(QtWidgets.QWidget):
         self.pos.set_user(user)
         if hasattr(self.customers, "set_user"):
             self.customers.set_user(user)
+        if hasattr(self.suppliers, "set_user"):
+            self.suppliers.set_user(user)
         if hasattr(self.settings, "set_user"):
             self.settings.set_user(user)

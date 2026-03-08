@@ -57,6 +57,8 @@ def upsert_customer(cust: CustomerCreate, db: Session = Depends(get_db)):
             existing.phone = cust.phone or ""
             existing.email = cust.email or ""
             existing.address = cust.address or ""
+            if existing.is_active is None or not bool(existing.is_active):
+                existing.is_active = True
             db.add(existing)
             db.commit()
             db.refresh(existing)
@@ -68,6 +70,7 @@ def upsert_customer(cust: CustomerCreate, db: Session = Depends(get_db)):
                 phone=cust.phone or "",
                 email=cust.email or "",
                 address=cust.address or "",
+                is_active=True,
             )
             db.add(newc)
             db.commit()
@@ -79,6 +82,7 @@ def upsert_customer(cust: CustomerCreate, db: Session = Depends(get_db)):
             phone=cust.phone or "",
             email=cust.email or "",
             address=cust.address or "",
+            is_active=True,
         )
         db.add(newc)
         db.commit()

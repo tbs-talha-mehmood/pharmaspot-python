@@ -1,4 +1,4 @@
-from PyQt5 import QtWidgets, QtCore
+from PyQt5 import QtWidgets, QtCore, QtGui
 from datetime import datetime
 from .ui_common import (
     apply_form_layout,
@@ -30,7 +30,7 @@ class CustomersView(QtWidgets.QWidget):
         self.chk_inactive = QtWidgets.QCheckBox("Show inactive")
         self.btn_add = QtWidgets.QPushButton("Add Customer")
         self.btn_edit = QtWidgets.QPushButton("Edit")
-        self.btn_delete = QtWidgets.QPushButton("Delete")
+        self.btn_delete = QtWidgets.QPushButton("Deactivate")
         set_secondary(self.btn_edit)
         set_accent(self.btn_add)
         set_danger(self.btn_delete)
@@ -85,6 +85,8 @@ class CustomersView(QtWidgets.QWidget):
         self._page = 1
         self._pages = 1
         polish_controls(self)
+        self.table.itemSelectionChanged.connect(self._sync_action_state)
+        self._sync_action_state()
 
     def focus_search(self):
         self.search.setFocus(QtCore.Qt.OtherFocusReason)
@@ -94,6 +96,22 @@ class CustomersView(QtWidgets.QWidget):
         if obj is self.search and event.type() == QtCore.QEvent.FocusIn:
             QtCore.QTimer.singleShot(0, self.search.selectAll)
         return super().eventFilter(obj, event)
+    def _sync_action_state(self):
+        existing = self._selected_customer()
+        has_sel = existing is not None
+        is_active = bool((existing or {}).get("is_active", True))
+        self.btn_edit.setEnabled(has_sel)
+        self.btn_delete.setEnabled(has_sel)
+        self.btn_delete.setText("Reactivate" if (has_sel and not is_active) else "Deactivate")
+        if has_sel and not is_active:
+            self.btn_delete.setProperty("danger", False)
+            self.btn_delete.setProperty("accent", True)
+        else:
+            self.btn_delete.setProperty("accent", False)
+            self.btn_delete.setProperty("danger", True)
+        self.btn_delete.style().unpolish(self.btn_delete)
+        self.btn_delete.style().polish(self.btn_delete)
+        self.btn_delete.update()
 
     def _on_search_changed(self):
         self._search_timer.stop()
@@ -135,6 +153,7 @@ class CustomersView(QtWidgets.QWidget):
         self.page_label.setText(f"Page {self._page} / {self._pages}")
         self.btn_prev.setEnabled(self._page > 1)
         self.btn_next.setEnabled(self._page < self._pages)
+        self._sync_action_state()
 
     def _on_filter_changed(self):
         self._page = 1
@@ -267,6 +286,15 @@ class CustomersView(QtWidgets.QWidget):
             5: 108,  # Due
             6: 102,  # Discount
         }
+        pay_col_widths = {
+            0: 116,  # Date
+            1: 92,   # Time
+            2: 96,   # Invoice #
+            3: 110,  # Amount
+            4: 110,  # Paid Total
+            5: 206,  # User (wider to align tables)
+            6: 0,    # Payment ID (hidden, zero-width)
+        }
 
         dlg = QtWidgets.QDialog(self)
         dlg.setWindowTitle(f"Customer Profile - {cname}")
@@ -292,13 +320,14 @@ class CustomersView(QtWidgets.QWidget):
         summary_row.addStretch(1)
         v.addLayout(summary_row)
 
+        # Invoices table
         table = QtWidgets.QTableWidget(0, 7)
         table.setHorizontalHeaderLabels(["Invoice #", "Date", "Time", "Total", "Paid", "Due", "Discount"])
         configure_table(table, stretch_last=False)
         table.verticalHeader().setDefaultSectionSize(row_h)
         table.setWordWrap(False)
         table.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
-        table.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        table.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
         hdr = table.horizontalHeader()
         for col in range(7):
             hdr.setSectionResizeMode(col, QtWidgets.QHeaderView.Fixed)
@@ -309,12 +338,38 @@ class CustomersView(QtWidgets.QWidget):
         info_lbl.setObjectName("mutedLabel")
         v.addWidget(info_lbl)
 
-        overflow_lbl = QtWidgets.QLabel("")
-        overflow_lbl.setObjectName("mutedLabel")
-        overflow_lbl.setVisible(False)
-        v.addWidget(overflow_lbl)
+        # Payments table (mirrors supplier profile)
+        payments_title = QtWidgets.QLabel("Payment History (Installments)")
+        payments_title.setObjectName("mutedLabel")
+        v.addWidget(payments_title)
 
-        state = {"due_total": 0.0, "total_rows": 0}
+        payments_table = QtWidgets.QTableWidget(0, 7)
+        payments_table.setHorizontalHeaderLabels(
+            ["Date", "Time", "Invoice #", "Amount", "Paid Total", "User", "Payment ID"]
+        )
+        payments_table.setColumnHidden(6, True)
+        configure_table(payments_table, stretch_last=False)
+        payments_table.verticalHeader().setDefaultSectionSize(row_h)
+        payments_table.setWordWrap(False)
+        payments_table.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        payments_table.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+        ph = payments_table.horizontalHeader()
+        for col in range(7):
+            ph.setSectionResizeMode(col, QtWidgets.QHeaderView.Fixed)
+            payments_table.setColumnWidth(col, pay_col_widths[col])
+        v.addWidget(payments_table)
+
+        inv_overflow_lbl = QtWidgets.QLabel("")
+        inv_overflow_lbl.setObjectName("mutedLabel")
+        inv_overflow_lbl.setVisible(False)
+        v.addWidget(inv_overflow_lbl)
+
+        pay_overflow_lbl = QtWidgets.QLabel("")
+        pay_overflow_lbl.setObjectName("mutedLabel")
+        pay_overflow_lbl.setVisible(False)
+        v.addWidget(pay_overflow_lbl)
+
+        state = {"due_total": 0.0, "total_rows": 0, "user_map": {}}
 
         def _to_float(value, default=0.0):
             try:
@@ -322,28 +377,103 @@ class CustomersView(QtWidgets.QWidget):
             except Exception:
                 return float(default)
 
-        def _fit_dialog():
-            table_frame = table.frameWidth() * 2 + 2
-            table_w = sum(col_widths.values()) + table_frame
-            table_h = table.frameWidth() * 2 + table.horizontalHeader().height() + (table.rowCount() * row_h) + 2
-            table.setFixedSize(table_w, table_h)
+        def _fit_tables():
+            # Keep invoice and payment tables aligned and scrollable even with many rows.
+            max_visible_rows = 12
+            base_w = max(
+                sum(col_widths.values()),
+                sum(pay_col_widths[c] for c in range(7) if c != 6),
+            )
+
+            inv_frame = table.frameWidth() * 2 + 2
+            inv_table_w = base_w + inv_frame
+            inv_rows = min(table.rowCount(), max_visible_rows)
+            inv_table_h = (
+                table.frameWidth() * 2 + table.horizontalHeader().height() + (inv_rows * row_h) + 2
+            )
+            table.setFixedSize(inv_table_w, inv_table_h)
+
+            pay_frame = payments_table.frameWidth() * 2 + 2
+            pay_table_w = base_w + pay_frame
+            pay_rows = min(payments_table.rowCount(), max_visible_rows)
+            pay_table_h = (
+                payments_table.frameWidth() * 2
+                + payments_table.horizontalHeader().height()
+                + (pay_rows * row_h)
+                + 2
+            )
+            payments_table.setFixedSize(pay_table_w, pay_table_h)
+
             dlg.adjustSize()
-            dlg.setFixedSize(min(max_dlg_w, dlg.sizeHint().width()), min(max_dlg_h, dlg.sizeHint().height()))
+            target_w = min(max_dlg_w, dlg.sizeHint().width())
+            target_h = min(max_dlg_h, dlg.sizeHint().height())
+            dlg.setFixedSize(target_w, target_h)
+
+        def _load_user_map():
+            m = {}
+            try:
+                for u in self.api.users_all() or []:
+                    uid = int((u or {}).get("id", 0) or 0)
+                    if uid > 0:
+                        name = str(u.get("fullname", "") or u.get("username", "") or f"User {uid}")
+                        m[uid] = name
+            except Exception:
+                pass
+            state["user_map"] = m
+
+        def _user_name(uid: int) -> str:
+            try:
+                return str(state.get("user_map", {}).get(int(uid or 0), f"User {int(uid or 0)}"))
+            except Exception:
+                return ""
 
         def _refresh_profile():
             try:
-                rows = self._customer_transactions(cid)
+                inv_rows = self._customer_transactions(cid)
             except Exception as e:
                 QtWidgets.QMessageBox.critical(dlg, "Error", str(e))
                 return False
-            rows.sort(key=lambda row: str(row.get("date", "") or ""), reverse=True)
-            state["total_rows"] = len(rows)
+            try:
+                all_pay_rows = self.api.transaction_payments_list() or []
+            except Exception:
+                all_pay_rows = []
+
+            if isinstance(all_pay_rows, dict) and str(all_pay_rows.get("detail", "")).strip():
+                QtWidgets.QMessageBox.information(dlg, "Payments", str(all_pay_rows.get("detail", "")).strip())
+                all_pay_rows = []
+
+            inv_rows = list(inv_rows or [])
+            inv_rows.sort(key=lambda row: str(row.get("date", "") or ""), reverse=True)
+
+            invoice_ids: set[int] = set()
+            for row in inv_rows:
+                try:
+                    tx_id = int((row or {}).get("id", 0) or 0)
+                except Exception:
+                    tx_id = 0
+                if tx_id > 0:
+                    invoice_ids.add(tx_id)
+
+            pay_rows: list[dict] = []
+            for row in list(all_pay_rows or []):
+                try:
+                    tx_id = int((row or {}).get("transaction_id", 0) or 0)
+                except Exception:
+                    tx_id = 0
+                if tx_id in invoice_ids:
+                    pay_rows.append(row)
+
+            pay_rows.sort(key=lambda row: int((row or {}).get("id", 0) or 0), reverse=True)
+
             table.setRowCount(0)
+            payments_table.setRowCount(0)
+
+            state["total_rows"] = len(inv_rows)
 
             total_sum = 0.0
             paid_sum = 0.0
             due_sum = 0.0
-            for t in rows:
+            for t in inv_rows:
                 total = max(0.0, _to_float(t.get("total", 0.0), 0.0))
                 paid = max(0.0, _to_float(t.get("paid", 0.0), 0.0))
                 due = max(0.0, total - paid)
@@ -351,24 +481,28 @@ class CustomersView(QtWidgets.QWidget):
                 paid_sum += paid
                 due_sum += due
 
-            inv_lbl.setText(f"Invoices: {len(rows)}")
+            inv_lbl.setText(f"Invoices: {len(inv_rows)}")
             total_lbl.setText(f"Total: {total_sum:.2f}")
             paid_lbl.setText(f"Paid: {paid_sum:.2f}")
             due_lbl.setText(f"Merged Due: {due_sum:.2f}")
             state["due_total"] = float(due_sum)
             receive_btn.setEnabled(due_sum > 1e-9)
 
-            if not rows:
-                overflow_lbl.setVisible(False)
-                _fit_dialog()
+            if not inv_rows and not pay_rows:
+                inv_overflow_lbl.setVisible(False)
+                pay_overflow_lbl.setVisible(False)
+                _fit_tables()
+                self.refresh()
                 return True
 
-            header_h = max(30, table.horizontalHeader().height())
-            max_rows_fit = max(1, int((max_dlg_h - chrome_h - header_h) / max(1, row_h)))
-            visible_rows = rows[:max_rows_fit]
-            hidden_count = max(0, len(rows) - len(visible_rows))
+            # Show all rows; dialog height is capped by _fit_tables and tables become scrollable.
+            inv_rows_budget = len(inv_rows)
+            pay_rows_budget = len(pay_rows)
 
-            for t in visible_rows:
+            # Fill invoices
+            visible_inv_rows = inv_rows[:inv_rows_budget]
+            hidden_inv = max(0, len(inv_rows) - len(visible_inv_rows))
+            for t in visible_inv_rows:
                 rr = table.rowCount()
                 table.insertRow(rr)
                 total = max(0.0, _to_float(t.get("total", 0.0), 0.0))
@@ -393,6 +527,8 @@ class CustomersView(QtWidgets.QWidget):
                 paid_item.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
                 due_item.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
                 disc_item.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
+                if due > 1e-9:
+                    due_item.setForeground(QtGui.QBrush(QtGui.QColor("#F87171")))
 
                 table.setItem(rr, 0, inv_item)
                 table.setItem(rr, 1, date_item)
@@ -402,15 +538,141 @@ class CustomersView(QtWidgets.QWidget):
                 table.setItem(rr, 5, due_item)
                 table.setItem(rr, 6, disc_item)
 
-            if hidden_count > 0:
-                overflow_lbl.setText(
-                    f"Showing latest {len(visible_rows)} of {len(rows)} invoices to fit screen without scrolling."
+            if hidden_inv > 0:
+                inv_overflow_lbl.setText(
+                    f"Showing latest {len(visible_inv_rows)} of {len(inv_rows)} invoices to fit screen without scrolling."
                 )
-                overflow_lbl.setVisible(True)
+                inv_overflow_lbl.setVisible(True)
             else:
-                overflow_lbl.setVisible(False)
-            _fit_dialog()
+                inv_overflow_lbl.setVisible(False)
+
+            # Fill payments
+            _load_user_map()
+            visible_pay_rows = pay_rows[:pay_rows_budget]
+            hidden_pay = max(0, len(pay_rows) - len(visible_pay_rows))
+            for row in visible_pay_rows:
+                rr = payments_table.rowCount()
+                payments_table.insertRow(rr)
+                date_txt, time_txt = self._split_datetime(row.get("date", ""))
+                inv_id = int((row or {}).get("transaction_id", 0) or 0)
+                amount = _to_float(row.get("amount", 0.0), 0.0)
+                paid_total = _to_float(row.get("paid_total", 0.0), 0.0)
+                uid = int((row or {}).get("user_id", 0) or 0)
+                pid = int((row or {}).get("id", 0) or 0)
+
+                date_item = QtWidgets.QTableWidgetItem(date_txt)
+                time_item = QtWidgets.QTableWidgetItem(time_txt)
+                inv_item = QtWidgets.QTableWidgetItem(str(inv_id))
+                amount_item = QtWidgets.QTableWidgetItem(f"{amount:.2f}")
+                paid_total_item = QtWidgets.QTableWidgetItem(f"{paid_total:.2f}")
+                user_item = QtWidgets.QTableWidgetItem(_user_name(uid))
+                id_item = QtWidgets.QTableWidgetItem(str(pid))
+
+                date_item.setTextAlignment(QtCore.Qt.AlignCenter)
+                time_item.setTextAlignment(QtCore.Qt.AlignCenter)
+                inv_item.setTextAlignment(QtCore.Qt.AlignCenter)
+                amount_item.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
+                paid_total_item.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
+
+                payments_table.setItem(rr, 0, date_item)
+                payments_table.setItem(rr, 1, time_item)
+                payments_table.setItem(rr, 2, inv_item)
+                payments_table.setItem(rr, 3, amount_item)
+                payments_table.setItem(rr, 4, paid_total_item)
+                payments_table.setItem(rr, 5, user_item)
+                payments_table.setItem(rr, 6, id_item)
+
+            if hidden_pay > 0:
+                pay_overflow_lbl.setText(
+                    f"Showing latest {len(visible_pay_rows)} of {len(pay_rows)} payments to fit screen without scrolling."
+                )
+                pay_overflow_lbl.setVisible(True)
+            else:
+                pay_overflow_lbl.setVisible(False)
+
+            _fit_tables()
+            self.refresh()
             return True
+
+        def _edit_selected_payment():
+            rr = payments_table.currentRow()
+            if rr < 0:
+                QtWidgets.QMessageBox.information(dlg, "Payments", "Select a payment row first.")
+                return
+            id_item = payments_table.item(rr, 6)
+            inv_item = payments_table.item(rr, 2)
+            amt_item = payments_table.item(rr, 3)
+            if not id_item or not inv_item or not amt_item:
+                QtWidgets.QMessageBox.information(dlg, "Payments", "Invalid payment row.")
+                return
+            try:
+                payment_id = int(id_item.text() or 0)
+            except Exception:
+                payment_id = 0
+            try:
+                transaction_id = int(inv_item.text() or 0)
+            except Exception:
+                transaction_id = 0
+            if payment_id <= 0 or transaction_id <= 0:
+                QtWidgets.QMessageBox.information(dlg, "Payments", "Invalid payment selection.")
+                return
+            try:
+                current_amount = float((amt_item.text() or "0").replace("+", ""))
+            except Exception:
+                current_amount = 0.0
+            new_amount, ok = QtWidgets.QInputDialog.getDouble(
+                dlg,
+                "Edit Payment",
+                "Payment amount:",
+                value=current_amount,
+                min=0.0,
+                max=10**12,
+                decimals=2,
+            )
+            if not ok:
+                return
+            try:
+                resp = self.api.transaction_payment_update(transaction_id, payment_id, float(new_amount))
+            except Exception as e:
+                QtWidgets.QMessageBox.critical(dlg, "Error", str(e))
+                return
+            if isinstance(resp, dict) and resp.get("detail") and not resp.get("id"):
+                QtWidgets.QMessageBox.information(dlg, "Payments", str(resp.get("detail")))
+                return
+            _refresh_profile()
+
+        def _delete_selected_payment():
+            rr = payments_table.currentRow()
+            if rr < 0:
+                QtWidgets.QMessageBox.information(dlg, "Payments", "Select a payment row first.")
+                return
+            id_item = payments_table.item(rr, 6)
+            inv_item = payments_table.item(rr, 2)
+            if not id_item or not inv_item:
+                QtWidgets.QMessageBox.information(dlg, "Payments", "Invalid payment row.")
+                return
+            try:
+                payment_id = int(id_item.text() or 0)
+            except Exception:
+                payment_id = 0
+            try:
+                transaction_id = int(inv_item.text() or 0)
+            except Exception:
+                transaction_id = 0
+            if payment_id <= 0 or transaction_id <= 0:
+                QtWidgets.QMessageBox.information(dlg, "Payments", "Invalid payment selection.")
+                return
+            if QtWidgets.QMessageBox.question(dlg, "Confirm", "Delete this payment entry?") != QtWidgets.QMessageBox.Yes:
+                return
+            try:
+                resp = self.api.transaction_payment_delete(transaction_id, payment_id)
+            except Exception as e:
+                QtWidgets.QMessageBox.critical(dlg, "Error", str(e))
+                return
+            if isinstance(resp, dict) and resp.get("detail") and not resp.get("id"):
+                QtWidgets.QMessageBox.information(dlg, "Payments", str(resp.get("detail")))
+                return
+            _refresh_profile()
 
         def _receive_payment():
             merged_due = float(state.get("due_total", 0.0) or 0.0)
@@ -458,15 +720,18 @@ class CustomersView(QtWidgets.QWidget):
         btn_row = QtWidgets.QHBoxLayout()
         apply_header_layout(btn_row)
         receive_btn = QtWidgets.QPushButton("Receive Payment")
-        refresh_btn = QtWidgets.QPushButton("Refresh")
+        edit_btn = QtWidgets.QPushButton("Edit Selected")
+        delete_btn = QtWidgets.QPushButton("Delete Selected")
         close_btn = QtWidgets.QPushButton("Close")
         set_accent(receive_btn)
-        set_secondary(refresh_btn, close_btn)
+        set_secondary(edit_btn, delete_btn, close_btn)
         receive_btn.clicked.connect(_receive_payment)
-        refresh_btn.clicked.connect(_refresh_profile)
+        edit_btn.clicked.connect(_edit_selected_payment)
+        delete_btn.clicked.connect(_delete_selected_payment)
         close_btn.clicked.connect(dlg.accept)
         btn_row.addWidget(receive_btn)
-        btn_row.addWidget(refresh_btn)
+        btn_row.addWidget(edit_btn)
+        btn_row.addWidget(delete_btn)
         btn_row.addStretch(1)
         btn_row.addWidget(close_btn)
         v.addLayout(btn_row)
@@ -527,10 +792,36 @@ class CustomersView(QtWidgets.QWidget):
         if not existing:
             QtWidgets.QMessageBox.information(self, "Select", "Select a customer row first")
             return
-        if QtWidgets.QMessageBox.question(self, "Confirm", "Delete this customer?") != QtWidgets.QMessageBox.Yes:
-            return
+        is_active = bool(existing.get("is_active", True))
         try:
-            self.api.customer_delete(int(existing.get("id")))
+            if is_active:
+                if QtWidgets.QMessageBox.question(self, "Confirm", "Deactivate this customer?") != QtWidgets.QMessageBox.Yes:
+                    return
+                self.api.customer_delete(int(existing.get("id")))
+                QtWidgets.QMessageBox.information(self, "Deactivated", "Customer has been deactivated.")
+            else:
+                if QtWidgets.QMessageBox.question(self, "Confirm", "Reactivate this customer?") != QtWidgets.QMessageBox.Yes:
+                    return
+                payload = {
+                    "id": int(existing.get("id")),
+                    "name": str(existing.get("name", "") or ""),
+                    "phone": str(existing.get("phone", "") or ""),
+                    "email": str(existing.get("email", "") or ""),
+                    "address": str(existing.get("address", "") or ""),
+                }
+                resp = self.api.customer_upsert(payload)
+                if isinstance(resp, dict) and resp.get("detail") and not resp.get("id"):
+                    QtWidgets.QMessageBox.warning(self, "Error", str(resp.get("detail")))
+                    return
+                QtWidgets.QMessageBox.information(self, "Reactivated", "Customer has been reactivated.")
             self.refresh()
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Error", str(e))
+
+
+
+
+
+
+
+

@@ -1,7 +1,7 @@
 from collections import defaultdict, deque
 from datetime import datetime
 
-from PyQt5 import QtCore, QtWidgets
+from PyQt5 import QtCore, QtWidgets, QtGui
 
 from .ui_common import (
     apply_header_layout,
@@ -50,8 +50,11 @@ class ReportsView(QtWidgets.QWidget):
         filters.addWidget(self.user_filter)
 
         self.btn_reset = QtWidgets.QPushButton("Reset Filters")
+        self.btn_reconcile = QtWidgets.QPushButton("Profit Reconciliation")
         set_secondary(self.btn_reset)
+        set_secondary(self.btn_reconcile)
         filters.addWidget(self.btn_reset)
+        filters.addWidget(self.btn_reconcile)
         filters.addStretch(1)
         layout.addLayout(filters)
 
@@ -94,6 +97,7 @@ class ReportsView(QtWidgets.QWidget):
         self.end.dateChanged.connect(self.refresh)
         self.user_filter.currentIndexChanged.connect(self.refresh)
         self.btn_reset.clicked.connect(self._reset_filters)
+        self.btn_reconcile.clicked.connect(self._open_profit_reconciliation)
         polish_controls(self)
 
     def _metric_card(self, title: str, value: str):
@@ -118,6 +122,165 @@ class ReportsView(QtWidgets.QWidget):
         self.end.blockSignals(False)
         self.user_filter.blockSignals(False)
         self.refresh()
+
+    def _open_profit_reconciliation(self):
+        start_txt = self.start.date().toString("yyyy-MM-dd")
+        end_txt = self.end.date().toString("yyyy-MM-dd")
+        try:
+            uid = int(self.user_filter.currentData() or 0)
+        except Exception:
+            uid = 0
+
+        try:
+            data = self.api.profit_reconciliation(start_date=start_txt, end_date=end_txt, user_id=uid) or {}
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Error", str(e))
+            return
+        if isinstance(data, dict) and str(data.get("detail", "")).strip():
+            QtWidgets.QMessageBox.information(self, "Profit Reconciliation", str(data.get("detail", "")).strip())
+            return
+
+        summary = dict(data.get("summary") or {})
+        items = list(data.get("items") or [])
+        start_date = str(data.get("start_date", start_txt) or start_txt)
+        end_date = str(data.get("end_date", end_txt) or end_txt)
+
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle("Profit Reconciliation")
+        layout = QtWidgets.QVBoxLayout(dlg)
+        apply_page_layout(layout)
+
+        head = QtWidgets.QHBoxLayout()
+        apply_header_layout(head)
+        head.addWidget(QtWidgets.QLabel(f"Period: {start_date} to {end_date}"))
+        if uid > 0:
+            uname = self._user_name_by_id.get(int(uid), f"User {int(uid)}")
+            head.addWidget(QtWidgets.QLabel(f"User: {uname}"))
+        head.addStretch(1)
+        layout.addLayout(head)
+
+        sums = QtWidgets.QHBoxLayout()
+        apply_header_layout(sums)
+        s1 = QtWidgets.QLabel(
+            f"Expected COGS: {self._to_float(summary.get('expected_cogs', 0.0), 0.0):.2f}"
+        )
+        s2 = QtWidgets.QLabel(
+            f"Actual COGS: {self._to_float(summary.get('actual_cogs', 0.0), 0.0):.2f}"
+        )
+        s3 = QtWidgets.QLabel(
+            f"Difference: {self._to_float(summary.get('difference', 0.0), 0.0):.2f}"
+        )
+        s4 = QtWidgets.QLabel(f"Profit: {self._to_float(summary.get('profit', 0.0), 0.0):.2f}")
+        s5 = QtWidgets.QLabel(f"Mismatches: {self._to_int(summary.get('mismatch_count', 0), 0)}")
+        for lbl in (s1, s2, s3, s4, s5):
+            lbl.setObjectName("mutedLabel")
+            sums.addWidget(lbl)
+        sums.addStretch(1)
+        layout.addLayout(sums)
+
+        table = QtWidgets.QTableWidget(0, 14)
+        table.setHorizontalHeaderLabels(
+            [
+                "Product",
+                "Open Qty",
+                "Open Value",
+                "Purch Qty",
+                "Purch Value",
+                "Close Qty",
+                "Close Value",
+                "Expected COGS",
+                "Actual COGS",
+                "Difference",
+                "Sales",
+                "Profit",
+                "Provisional",
+                "Mismatch",
+            ]
+        )
+        configure_table(table, stretch_last=False)
+        table.verticalHeader().setDefaultSectionSize(34)
+        hdr = table.horizontalHeader()
+        hdr.setSectionResizeMode(0, QtWidgets.QHeaderView.Stretch)
+        for col in range(1, 14):
+            hdr.setSectionResizeMode(col, QtWidgets.QHeaderView.ResizeToContents)
+        layout.addWidget(table, 1)
+
+        rows = sorted(items, key=lambda it: (not bool(it.get("mismatch", False)), str(it.get("product_name", "")).lower()))
+        table.setRowCount(0)
+        for row in rows:
+            r = table.rowCount()
+            table.insertRow(r)
+
+            product_item = QtWidgets.QTableWidgetItem(str(row.get("product_name", "") or ""))
+            open_qty_item = QtWidgets.QTableWidgetItem(f"{self._to_float(row.get('opening_qty', 0.0), 0.0):.2f}")
+            open_val_item = QtWidgets.QTableWidgetItem(f"{self._to_float(row.get('opening_value', 0.0), 0.0):.2f}")
+            purch_qty_item = QtWidgets.QTableWidgetItem(f"{self._to_float(row.get('purchases_qty', 0.0), 0.0):.2f}")
+            purch_val_item = QtWidgets.QTableWidgetItem(f"{self._to_float(row.get('purchases_value', 0.0), 0.0):.2f}")
+            close_qty_item = QtWidgets.QTableWidgetItem(f"{self._to_float(row.get('closing_qty', 0.0), 0.0):.2f}")
+            close_val_item = QtWidgets.QTableWidgetItem(f"{self._to_float(row.get('closing_value', 0.0), 0.0):.2f}")
+            exp_item = QtWidgets.QTableWidgetItem(f"{self._to_float(row.get('expected_cogs', 0.0), 0.0):.2f}")
+            act_item = QtWidgets.QTableWidgetItem(f"{self._to_float(row.get('actual_cogs', 0.0), 0.0):.2f}")
+            diff_item = QtWidgets.QTableWidgetItem(f"{self._to_float(row.get('difference', 0.0), 0.0):.2f}")
+            sales_item = QtWidgets.QTableWidgetItem(f"{self._to_float(row.get('sales_value', 0.0), 0.0):.2f}")
+            profit_item = QtWidgets.QTableWidgetItem(f"{self._to_float(row.get('profit', 0.0), 0.0):.2f}")
+            prov_item = QtWidgets.QTableWidgetItem(f"{self._to_float(row.get('provisional_open_cost', 0.0), 0.0):.2f}")
+            mismatch = bool(row.get("mismatch", False))
+            mismatch_item = QtWidgets.QTableWidgetItem("Yes" if mismatch else "No")
+
+            product_item.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignLeft)
+            for itm in (
+                open_qty_item,
+                open_val_item,
+                purch_qty_item,
+                purch_val_item,
+                close_qty_item,
+                close_val_item,
+                exp_item,
+                act_item,
+                diff_item,
+                sales_item,
+                profit_item,
+                prov_item,
+            ):
+                itm.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
+            mismatch_item.setTextAlignment(QtCore.Qt.AlignCenter)
+
+            if mismatch:
+                for itm in (diff_item, mismatch_item):
+                    itm.setForeground(QtGui.QBrush(QtGui.QColor("#F87171")))
+
+            table.setItem(r, 0, product_item)
+            table.setItem(r, 1, open_qty_item)
+            table.setItem(r, 2, open_val_item)
+            table.setItem(r, 3, purch_qty_item)
+            table.setItem(r, 4, purch_val_item)
+            table.setItem(r, 5, close_qty_item)
+            table.setItem(r, 6, close_val_item)
+            table.setItem(r, 7, exp_item)
+            table.setItem(r, 8, act_item)
+            table.setItem(r, 9, diff_item)
+            table.setItem(r, 10, sales_item)
+            table.setItem(r, 11, profit_item)
+            table.setItem(r, 12, prov_item)
+            table.setItem(r, 13, mismatch_item)
+
+        btn_row = QtWidgets.QHBoxLayout()
+        apply_header_layout(btn_row)
+        btn_close = QtWidgets.QPushButton("Close")
+        set_secondary(btn_close)
+        btn_close.clicked.connect(dlg.accept)
+        btn_row.addStretch(1)
+        btn_row.addWidget(btn_close)
+        layout.addLayout(btn_row)
+
+        polish_controls(dlg)
+        screen = QtWidgets.QApplication.primaryScreen()
+        if screen is not None:
+            geo = screen.availableGeometry()
+            dlg.resize(min(1450, max(1000, geo.width() - 80)), min(860, max(620, geo.height() - 80)))
+        else:
+            dlg.resize(1280, 760)
+        dlg.exec_()
 
     def _parse_datetime(self, raw_value):
         dt = str(raw_value or "").strip()
@@ -170,7 +333,19 @@ class ReportsView(QtWidgets.QWidget):
         trade_calc = retail * (1.0 - (disc_pct / 100.0))
         return max(0.0, trade_calc * (1.0 - (extra_pct / 100.0)))
 
-    def _build_invoice_profit_map(self, docs, purchases):
+    def _product_cost_hint(self, product: dict) -> float:
+        trade = max(0.0, self._to_float(product.get("trade_price", 0.0), 0.0))
+        if trade > 1e-9:
+            return trade
+        retail = max(0.0, self._to_float(product.get("price", 0.0), 0.0))
+        raw_disc = product.get("discount_pct", product.get("purchase_discount", 0.0))
+        disc = max(0.0, self._to_float(raw_disc, 0.0))
+        if retail > 1e-9:
+            return max(0.0, retail * (1.0 - (disc / 100.0)))
+        return 0.0
+
+    def _build_invoice_profit_map(self, docs, purchases, product_cost_hint_by_id: dict[int, float] | None = None):
+        product_cost_hint_by_id = dict(product_cost_hint_by_id or {})
         invoices: dict[int, dict] = {}
         events: list[tuple] = []
 
@@ -200,6 +375,7 @@ class ReportsView(QtWidgets.QWidget):
                 if line_subtotal <= 0.0:
                     continue
                 subtotal += line_subtotal
+                fallback_unit_cost = max(0.0, self._to_float(product_cost_hint_by_id.get(int(pid), 0.0), 0.0))
                 prepared_lines.append(
                     {
                         "line_index": int(idx),
@@ -207,6 +383,7 @@ class ReportsView(QtWidgets.QWidget):
                         "quantity": int(qty),
                         "unit_sell": float(unit_sell),
                         "line_subtotal": float(line_subtotal),
+                        "fallback_unit_cost": float(fallback_unit_cost),
                     }
                 )
 
@@ -244,6 +421,7 @@ class ReportsView(QtWidgets.QWidget):
                                 "transaction_id": tid,
                                 "product_id": int(line["product_id"]),
                                 "quantity": int(line["quantity"]),
+                                "fallback_unit_cost": float(line.get("fallback_unit_cost", 0.0) or 0.0),
                             },
                         )
                     )
@@ -339,6 +517,7 @@ class ReportsView(QtWidgets.QWidget):
                 tx_id = self._to_int(ev.get("transaction_id", 0), 0)
                 if tx_id <= 0:
                     continue
+                fallback_unit_cost = max(0.0, self._to_float(ev.get("fallback_unit_cost", 0.0), 0.0))
                 remaining = float(qty)
                 line_cost = 0.0
                 lotq = lots_by_product[pid]
@@ -358,6 +537,8 @@ class ReportsView(QtWidgets.QWidget):
 
                 if remaining > 1e-9:
                     provisional_unit = max(0.0, self._to_float(last_known_cost_by_product.get(pid, 0.0), 0.0))
+                    if provisional_unit <= 1e-9:
+                        provisional_unit = fallback_unit_cost
                     provisional_piece = float(remaining) * provisional_unit
                     line_cost += provisional_piece
                     invoice_provisional_open[tx_id] += provisional_piece
@@ -444,13 +625,25 @@ class ReportsView(QtWidgets.QWidget):
         except Exception:
             purchases = []
         try:
+            products = self.api.products(include_inactive=True) or []
+        except Exception:
+            products = []
+        try:
             payments = self.api.transaction_payments_list() or []
         except Exception:
             payments = []
 
         self._load_user_lookup(docs)
         self._rebuild_user_filter()
-        invoice_map = self._build_invoice_profit_map(docs, purchases)
+        product_cost_hint_by_id: dict[int, float] = {}
+        for p in products or []:
+            pid = self._to_int(p.get("id", 0), 0)
+            if pid <= 0:
+                continue
+            hint = max(0.0, self._to_float(self._product_cost_hint(p), 0.0))
+            if hint > 1e-9:
+                product_cost_hint_by_id[pid] = float(hint)
+        invoice_map = self._build_invoice_profit_map(docs, purchases, product_cost_hint_by_id=product_cost_hint_by_id)
 
         try:
             start_dt = self.start.date().toPyDate()
@@ -471,6 +664,7 @@ class ReportsView(QtWidgets.QWidget):
         profit_total = 0.0
         realized_profit_total = 0.0
         provisional_total = 0.0
+        provisional_qty_total = 0.0
 
         for tx_id, inv in invoice_map.items():
             tx_uid = self._to_int(inv.get("user_id", 0), 0)
@@ -489,6 +683,7 @@ class ReportsView(QtWidgets.QWidget):
             cogs = max(0.0, self._to_float(inv.get("cost", 0.0), 0.0))
             profit = self._to_float(inv.get("profit", 0.0), 0.0)
             provisional_open = max(0.0, self._to_float(inv.get("provisional_open", 0.0), 0.0))
+            provisional_qty = max(0.0, self._to_float(inv.get("provisional_qty_open", 0.0), 0.0))
             bucket = grouped.setdefault(
                 day,
                 {
@@ -500,6 +695,7 @@ class ReportsView(QtWidgets.QWidget):
                     "profit": 0.0,
                     "realized": 0.0,
                     "provisional": 0.0,
+                    "provisional_qty": 0.0,
                 },
             )
             bucket["count"] += 1
@@ -508,6 +704,7 @@ class ReportsView(QtWidgets.QWidget):
             bucket["cogs"] += cogs
             bucket["profit"] += profit
             bucket["provisional"] += provisional_open
+            bucket["provisional_qty"] += provisional_qty
 
             tx_count += 1
             gross_total += sales
@@ -515,6 +712,7 @@ class ReportsView(QtWidgets.QWidget):
             cogs_total += cogs
             profit_total += profit
             provisional_total += provisional_open
+            provisional_qty_total += provisional_qty
 
         for p in payments:
             pay_uid = self._to_int(p.get("user_id", 0), 0)
@@ -551,6 +749,7 @@ class ReportsView(QtWidgets.QWidget):
                     "profit": 0.0,
                     "realized": 0.0,
                     "provisional": 0.0,
+                    "provisional_qty": 0.0,
                 },
             )
             bucket["received"] += amount
@@ -567,6 +766,11 @@ class ReportsView(QtWidgets.QWidget):
         if provisional_total > 1e-9:
             self.provisional_note.setText(
                 f"Provisional open cost in selected range: {provisional_total:.2f} (sales before purchase not fully settled)."
+            )
+        elif provisional_qty_total > 1e-9:
+            self.provisional_note.setText(
+                f"Unsettled sale quantity in selected range: {provisional_qty_total:.0f} "
+                "(cost reference missing; re-add/edit purchase for accurate profit)."
             )
         else:
             self.provisional_note.setText("All costs in selected range are settled by purchase lots.")
