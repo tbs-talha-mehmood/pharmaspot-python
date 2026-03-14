@@ -28,6 +28,8 @@ def create_app() -> FastAPI:
     app.include_router(held_sales.router)
     app.include_router(reports.router)
 
+    return app
+
 
 def _ensure_schema_updates() -> None:
     # Lightweight runtime schema patch for existing DBs.
