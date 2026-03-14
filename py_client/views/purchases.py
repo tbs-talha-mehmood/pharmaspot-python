@@ -19,11 +19,28 @@ class PurchasesView(QtWidgets.QWidget):
     def __init__(self, api):
         super().__init__()
         self.api = api
+        self.user_id: int = 0
+        self._is_admin: bool = False
+        self._can_edit_invoice: bool = False
+        self._can_delete_payment: bool = False
         self._products_cache = None
         self._history_page = 1
         self._history_pages = 1
         self._build()
         self.refresh_history()
+
+    def set_user(self, user: dict):
+        u = user or {}
+        try:
+            self.user_id = int(u.get("id", 0) or 0)
+        except Exception:
+            self.user_id = 0
+        uname = str(u.get("username", "") or "").strip().lower()
+        self._is_admin = bool(self.user_id == 1 or uname == "admin")
+        self._can_edit_invoice = bool(u.get("perm_edit_invoice", False) or self._is_admin)
+        self._can_delete_payment = bool(u.get("perm_delete_payment", False) or self._is_admin)
+        # History delete button mirrors invoice delete permission
+        self.btn_delete.setEnabled(self._can_edit_invoice)
 
     def _build(self):
         layout = QtWidgets.QVBoxLayout(self)
@@ -785,6 +802,13 @@ class PurchasesView(QtWidgets.QWidget):
         self._load_purchase_into_form(match)
 
     def _delete_selected(self):
+        if not self._can_edit_invoice:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Permission",
+                "You do not have permission to delete purchase invoices.",
+            )
+            return
         r = self.history_table.currentRow()
         if r < 0:
             QtWidgets.QMessageBox.information(self, "Select", "Select a purchase row first")
@@ -799,7 +823,7 @@ class PurchasesView(QtWidgets.QWidget):
         if QtWidgets.QMessageBox.question(self, "Confirm", "Delete this purchase?") != QtWidgets.QMessageBox.Yes:
             return
         try:
-            resp = self.api.purchase_delete(pid)
+            resp = self.api.purchase_delete(pid, user_id=int(self.user_id or 0))
             if isinstance(resp, dict) and str(resp.get("detail", "")).strip():
                 QtWidgets.QMessageBox.information(self, "Delete blocked", str(resp.get("detail", "")).strip())
                 return

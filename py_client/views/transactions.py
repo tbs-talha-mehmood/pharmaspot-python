@@ -16,6 +16,10 @@ class TransactionsView(QtWidgets.QWidget):
         self.api = api
         self._user_name_by_id: dict[int, str] = {}
         self._customer_name_by_id: dict[int, str] = {}
+        self._user_id: int = 0
+        self._is_admin: bool = False
+        self._can_edit_invoice: bool = False
+        self._can_delete_payment: bool = False
         self._build()
         self.refresh()
 
@@ -105,6 +109,18 @@ class TransactionsView(QtWidgets.QWidget):
         self._page = 1
         self._pages = 1
         polish_controls(self)
+
+    def set_user(self, user: dict):
+        u = user or {}
+        try:
+            self._user_id = int(u.get("id", 0) or 0)
+        except Exception:
+            self._user_id = 0
+        uname = str(u.get("username", "") or "").strip().lower()
+        self._is_admin = bool(self._user_id == 1 or uname == "admin")
+        self._can_edit_invoice = bool(u.get("perm_edit_invoice", False) or self._is_admin)
+        self._can_delete_payment = bool(u.get("perm_delete_payment", False) or self._is_admin)
+        self.btn_delete.setEnabled(self._can_edit_invoice)
 
     def _reset_filters(self):
         self.start.blockSignals(True)
@@ -358,6 +374,13 @@ class TransactionsView(QtWidgets.QWidget):
         self.btn_next.setEnabled(self._page < self._pages)
 
     def delete_selected(self):
+        if not self._can_edit_invoice:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Permission",
+                "You do not have permission to delete invoices.",
+            )
+            return
         r = self.table.currentRow()
         if r < 0:
             QtWidgets.QMessageBox.information(self, "Select", "Select a transaction row first")
@@ -376,7 +399,7 @@ class TransactionsView(QtWidgets.QWidget):
         if QtWidgets.QMessageBox.question(self, "Confirm", "Delete this transaction?") != QtWidgets.QMessageBox.Yes:
             return
         try:
-            self.api.transaction_delete(tid)
+            self.api.transaction_delete(tid, user_id=int(self._user_id or 0))
             QtWidgets.QMessageBox.information(self, "Deleted", "Transaction deleted")
             self.refresh()
         except Exception as e:
@@ -549,6 +572,13 @@ class TransactionsView(QtWidgets.QWidget):
             if rr < 0:
                 QtWidgets.QMessageBox.information(self, "Payments", "Select a payment row first.")
                 return
+            if not self._can_delete_payment:
+                QtWidgets.QMessageBox.information(
+                    self,
+                    "Permission",
+                    "You do not have permission to modify payments.",
+                )
+                return
             id_item = table.item(rr, 5)
             amt_item = table.item(rr, 2)
             if not id_item or not amt_item:
@@ -573,11 +603,16 @@ class TransactionsView(QtWidgets.QWidget):
                 min=0.0,
                 max=10**12,
                 decimals=2,
-            )
+            ) 
             if not ok:
                 return
             try:
-                resp = self.api.transaction_payment_update(tid, payment_id, float(new_amount))
+                resp = self.api.transaction_payment_update(
+                    tid,
+                    payment_id,
+                    float(new_amount),
+                    user_id=int(self._user_id or 0),
+                )
             except Exception as e:
                 QtWidgets.QMessageBox.critical(self, "Error", str(e))
                 return
@@ -594,6 +629,9 @@ class TransactionsView(QtWidgets.QWidget):
             return
         edit_btn = QtWidgets.QPushButton("Edit Selected")
         edit_btn.clicked.connect(_edit_selected)
+        if not self._can_delete_payment:
+            edit_btn.setEnabled(False)
+            edit_btn.setToolTip("You do not have permission to modify payments.")
         close_btn = QtWidgets.QPushButton("Close")
         close_btn.clicked.connect(dlg.accept)
         set_secondary(edit_btn, close_btn)

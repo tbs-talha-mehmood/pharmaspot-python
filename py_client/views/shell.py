@@ -99,6 +99,22 @@ class ShellView(QtWidgets.QWidget):
 
     def set_user(self, user: dict):
         self.user = user
+
+        try:
+            uid = int(user.get("id", 0) or 0)
+        except Exception:
+            uid = 0
+        uname = str(user.get("username", "") or "").strip().lower()
+        is_admin = bool(uid == 1 or uname == "admin")
+
+        can_products = bool(user.get("perm_products", False) or is_admin)
+        can_see_cost = bool(user.get("perm_see_cost", False) or is_admin)
+        can_settings = bool(
+            user.get("perm_settings", False)
+            or user.get("perm_users", False)
+            or is_admin
+        )
+
         def _set_nav_visible(label: str, visible: bool):
             row = self._nav_row_by_label.get(label)
             if row is None:
@@ -107,19 +123,17 @@ class ShellView(QtWidgets.QWidget):
             if item is not None:
                 item.setHidden(not visible)
 
-        _set_nav_visible("Products", bool(user.get("perm_products", False)))
-        _set_nav_visible("Dashboard", True)
+        _set_nav_visible("Products", can_products)
+        _set_nav_visible("Dashboard", can_see_cost)
         _set_nav_visible("Companies", True)
         _set_nav_visible("Suppliers", True)
         _set_nav_visible("Customers", True)
         _set_nav_visible("Purchases", True)
         _set_nav_visible("Transactions", True)
-        _set_nav_visible("Reports", True)
-        _set_nav_visible(
-            "Settings",
-            bool(user.get("perm_settings", False) or user.get("perm_users", False)),
-        )
-        # pass user to POS for user_id in transactions
+        _set_nav_visible("Reports", can_see_cost)
+        _set_nav_visible("Settings", can_settings)
+
+        # Pass user details into child views
         self.pos.set_user(user)
         if hasattr(self.customers, "set_user"):
             self.customers.set_user(user)
@@ -127,3 +141,11 @@ class ShellView(QtWidgets.QWidget):
             self.suppliers.set_user(user)
         if hasattr(self.settings, "set_user"):
             self.settings.set_user(user)
+        if hasattr(self.purchases, "set_user"):
+            self.purchases.set_user(user)
+        if hasattr(self.transactions, "set_user"):
+            self.transactions.set_user(user)
+        if hasattr(self.reports, "set_user"):
+            self.reports.set_user(user)
+        if hasattr(self.dashboard, "set_user"):
+            self.dashboard.set_user(user)

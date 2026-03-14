@@ -29,6 +29,10 @@ class POSView(QtWidgets.QWidget):
         super().__init__()
         self.api = api
         self.user_id = 0
+        self._is_admin = False
+        self._can_give_discount = False
+        self._can_edit_invoice = False
+        self._can_delete_payment = False
         self.products_cache = []
         self.held_sales: list[dict] = []
         self._load_held_sales()
@@ -1161,6 +1165,13 @@ class POSView(QtWidgets.QWidget):
         dlg.exec_()
 
     def _reopen_invoice_by_number(self):
+        if not self._can_edit_invoice:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Permission",
+                "You do not have permission to edit invoices.",
+            )
+            return
         raw = (self.invoice_no.text() or "").strip()
         if not raw or not raw.isdigit():
             QtWidgets.QMessageBox.information(self, "Invoice", "Enter a valid invoice number.")
@@ -1346,6 +1357,13 @@ class POSView(QtWidgets.QWidget):
             if rr < 0:
                 QtWidgets.QMessageBox.information(self, "Payments", "Select a payment row first.")
                 return
+            if not self._can_delete_payment:
+                QtWidgets.QMessageBox.information(
+                    self,
+                    "Permission",
+                    "You do not have permission to modify payments.",
+                )
+                return
             id_item = table.item(rr, 5)
             amt_item = table.item(rr, 2)
             if not id_item or not amt_item:
@@ -1376,7 +1394,12 @@ class POSView(QtWidgets.QWidget):
             try:
                 resp = self._with_loader(
                     "Saving payment...",
-                    lambda: self.api.transaction_payment_update(inv, payment_id, float(new_amount)),
+                    lambda: self.api.transaction_payment_update(
+                        inv,
+                        payment_id,
+                        float(new_amount),
+                        user_id=int(self.user_id or 0),
+                    ),
                 )
             except Exception as e:
                 QtWidgets.QMessageBox.critical(self, "Error", str(e))
@@ -1396,6 +1419,9 @@ class POSView(QtWidgets.QWidget):
         close_btn.clicked.connect(dlg.accept)
         edit_btn = QtWidgets.QPushButton("Edit Selected")
         edit_btn.clicked.connect(_edit_selected)
+        if not self._can_delete_payment:
+            edit_btn.setEnabled(False)
+            edit_btn.setToolTip("You do not have permission to modify payments.")
         set_secondary(edit_btn, close_btn)
         row_btn = QtWidgets.QHBoxLayout()
         row_btn.addWidget(edit_btn)
@@ -2830,7 +2856,18 @@ class POSView(QtWidgets.QWidget):
     # ---------- User ----------
     def set_user(self, user: dict):
         try:
-            self.user_id = int(user.get("id", 0) or 0)
+            self.user_id = int((user or {}).get("id", 0) or 0)
         except Exception:
             self.user_id = 0
+        uname = str((user or {}).get("username", "") or "").strip().lower()
+        self._is_admin = bool(self.user_id == 1 or uname == "admin")
+        self._can_give_discount = bool(user.get("perm_give_discount", False) or self._is_admin)
+        self._can_edit_invoice = bool(user.get("perm_edit_invoice", False) or self._is_admin)
+        self._can_delete_payment = bool(user.get("perm_delete_payment", False) or self._is_admin)
+        self.discount.setEnabled(self._can_give_discount)
+        if not self._can_give_discount:
+            self.discount.setValue(0.0)
+            self.discount.setToolTip("You do not have permission to change discount.")
+        else:
+            self.discount.setToolTip("")
 

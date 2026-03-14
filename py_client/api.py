@@ -180,8 +180,9 @@ class ApiClient:
     def purchase_update(self, purchase_id: int, payload: dict):
         return requests.put(self.base_url + f"/api/purchases/purchase/{purchase_id}", json=payload).json()
 
-    def purchase_delete(self, purchase_id: int):
-        return requests.delete(self.base_url + f"/api/purchases/purchase/{int(purchase_id)}").json()
+    def purchase_delete(self, purchase_id: int, user_id: int = 0):
+        suffix = f"?user_id={int(user_id)}" if int(user_id or 0) > 0 else ""
+        return requests.delete(self.base_url + f"/api/purchases/purchase/{int(purchase_id)}{suffix}").json()
 
     def purchase_payments_list(self):
         return self.get("/api/purchases/payments").json()
@@ -251,9 +252,10 @@ class ApiClient:
     def transaction_payments_list(self):
         return self.get("/api/transactions/payments").json()
 
-    def transaction_payment_update(self, tid: int, payment_id: int, amount: float):
+    def transaction_payment_update(self, tid: int, payment_id: int, amount: float, user_id: int = 0):
+        suffix = f"?user_id={int(user_id)}" if int(user_id or 0) > 0 else ""
         return requests.put(
-            self.base_url + f"/api/transactions/transaction/{int(tid)}/payment/{int(payment_id)}",
+            self.base_url + f"/api/transactions/transaction/{int(tid)}/payment/{int(payment_id)}{suffix}",
             json={"amount": float(amount)},
         ).json()
 
@@ -263,8 +265,9 @@ class ApiClient:
     def transaction_update(self, tid: int, payload: dict):
         return requests.put(self.base_url + f"/api/transactions/transaction/{int(tid)}", json=payload).json()
 
-    def transaction_delete(self, tid: int):
-        return requests.delete(self.base_url + f"/api/transactions/transaction/{int(tid)}").json()
+    def transaction_delete(self, tid: int, user_id: int = 0):
+        suffix = f"?user_id={int(user_id)}" if int(user_id or 0) > 0 else ""
+        return requests.delete(self.base_url + f"/api/transactions/transaction/{int(tid)}{suffix}").json()
 
     # Reports
     def profit_reconciliation(self, start_date: str = "", end_date: str = "", user_id: int = 0):
@@ -288,17 +291,20 @@ class ApiClient:
         return self.get(f"/api/reports/company_inventory{suffix}").json()
 
 
-    def purchase_payment_update(self, purchase_id: int, payment_id: int, amount: float):
+    def purchase_payment_update(self, purchase_id: int, payment_id: int, amount: float, user_id: int = 0):
+        suffix = f"?user_id={int(user_id)}" if int(user_id or 0) > 0 else ""
         return requests.put(
-            self.base_url + f"/api/purchases/purchase/{int(purchase_id)}/payment/{int(payment_id)}",
+            self.base_url + f"/api/purchases/purchase/{int(purchase_id)}/payment/{int(payment_id)}{suffix}",
             json={"amount": float(amount)},
         ).json()
 
-    def transaction_payment_delete(self, tid: int, payment_id: int):
+    def transaction_payment_delete(self, tid: int, payment_id: int, user_id: int = 0):
         # Prefer the ID-only endpoint on the backend; tid is ignored but
         # kept for backwards compatibility with existing callers.
-        return requests.delete(self.base_url + f"/api/transactions/payment/{int(payment_id)}").json()
+        suffix = f"?user_id={int(user_id)}" if int(user_id or 0) > 0 else ""
+        return requests.delete(self.base_url + f"/api/transactions/payment/{int(payment_id)}{suffix}").json()
 
-    def purchase_payment_delete(self, purchase_id: int, payment_id: int):
+    def purchase_payment_delete(self, purchase_id: int, payment_id: int, user_id: int = 0):
         # Prefer the ID-only endpoint for symmetry with transaction payments.
-        return requests.delete(self.base_url + f"/api/purchases/payment/{int(payment_id)}").json()
+        suffix = f"?user_id={int(user_id)}" if int(user_id or 0) > 0 else ""
+        return requests.delete(self.base_url + f"/api/purchases/payment/{int(payment_id)}{suffix}").json()

@@ -20,6 +20,11 @@ class User(Base):
     perm_transactions = Column(Boolean, default=False)
     perm_users = Column(Boolean, default=False)
     perm_settings = Column(Boolean, default=False)
+    # Fine-grained permissions
+    perm_see_cost = Column(Boolean, default=False)
+    perm_give_discount = Column(Boolean, default=False)
+    perm_edit_invoice = Column(Boolean, default=False)
+    perm_delete_payment = Column(Boolean, default=False)
 
 
 class Product(Base):

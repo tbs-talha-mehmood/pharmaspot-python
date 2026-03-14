@@ -1,4 +1,5 @@
 from typing import Optional
+from datetime import datetime
 from pydantic import BaseModel
 
 
@@ -10,6 +11,10 @@ class UserCreate(BaseModel):
     perm_transactions: Optional[bool] = False
     perm_users: Optional[bool] = False
     perm_settings: Optional[bool] = False
+    perm_see_cost: Optional[bool] = False
+    perm_give_discount: Optional[bool] = False
+    perm_edit_invoice: Optional[bool] = False
+    perm_delete_payment: Optional[bool] = False
 
 
 class UserOut(BaseModel):
@@ -21,6 +26,10 @@ class UserOut(BaseModel):
     perm_transactions: bool
     perm_users: bool
     perm_settings: bool
+    perm_see_cost: bool
+    perm_give_discount: bool
+    perm_edit_invoice: bool
+    perm_delete_payment: bool
 
     class Config:
         from_attributes = True
@@ -41,7 +50,10 @@ class LoginResponse(BaseModel):
     perm_transactions: Optional[bool] = None
     perm_users: Optional[bool] = None
     perm_settings: Optional[bool] = None
-    message: Optional[str] = None
+    perm_see_cost: Optional[bool] = None
+    perm_give_discount: Optional[bool] = None
+    perm_edit_invoice: Optional[bool] = None
+    perm_delete_payment: Optional[bool] = None
 
 
 class ProductCreate(BaseModel):

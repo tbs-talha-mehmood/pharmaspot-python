@@ -67,6 +67,10 @@ class UsersView(QtWidgets.QWidget):
         p_transactions = QtWidgets.QCheckBox()
         p_users = QtWidgets.QCheckBox()
         p_settings = QtWidgets.QCheckBox()
+        p_see_cost = QtWidgets.QCheckBox()
+        p_give_discount = QtWidgets.QCheckBox()
+        p_edit_invoice = QtWidgets.QCheckBox()
+        p_delete_payment = QtWidgets.QCheckBox()
         form.addRow("Username", username)
         form.addRow("Fullname", fullname)
         form.addRow("Password", password)
@@ -74,6 +78,10 @@ class UsersView(QtWidgets.QWidget):
         form.addRow("Transactions", p_transactions)
         form.addRow("Users", p_users)
         form.addRow("Settings", p_settings)
+        form.addRow("Can See Cost/Profit", p_see_cost)
+        form.addRow("Can Give Discount", p_give_discount)
+        form.addRow("Can Edit Invoices", p_edit_invoice)
+        form.addRow("Can Delete Payments", p_delete_payment)
         btns = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
         form.addRow(btns)
         btns.accepted.connect(d.accept)
@@ -89,6 +97,10 @@ class UsersView(QtWidgets.QWidget):
                 "perm_transactions": p_transactions.isChecked(),
                 "perm_users": p_users.isChecked(),
                 "perm_settings": p_settings.isChecked(),
+                "perm_see_cost": p_see_cost.isChecked(),
+                "perm_give_discount": p_give_discount.isChecked(),
+                "perm_edit_invoice": p_edit_invoice.isChecked(),
+                "perm_delete_payment": p_delete_payment.isChecked(),
             }
             try:
                 self.api.user_upsert(payload)

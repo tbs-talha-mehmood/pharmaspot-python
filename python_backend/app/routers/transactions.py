@@ -517,6 +517,7 @@ def update_transaction_payment(
     transaction_id: int,
     payment_id: int,
     payload: TransactionPaymentEditIn,
+    user_id: int = 0,
     db: Session = Depends(get_db),
 ):
     t = db.query(Transaction).filter(Transaction.id == transaction_id).first()
@@ -547,6 +548,10 @@ def update_transaction_payment(
     prev_amount = float(row.amount or 0.0)
     candidate_paid = running_total - prev_amount + new_amount
     _validate_payment_bounds(t.total or 0.0, candidate_paid)
+    before = {
+        "amount": float(row.amount or 0.0),
+        "paid_total": float(t.paid or 0.0),
+    }
     row.amount = new_amount
     db.add(row)
     new_paid = _recompute_payment_totals(db, transaction_id)
@@ -565,6 +570,13 @@ def update_transaction(transaction_id: int, payload: TransactionCreate, db: Sess
     ensure_not_locked_for_date(db, parse_date_like(t.date or ""), "Updating sale")
     ensure_not_locked_for_date(db, parse_date_like(payload.date or t.date or ""), "Updating sale")
     prev_paid = float(t.paid or 0.0)
+    before = {
+        "customer_id": int(t.customer_id or 0),
+        "total": float(t.total or 0.0),
+        "paid": float(t.paid or 0.0),
+        "discount": float(t.discount or 0.0),
+        "status": int(t.status or 0),
+    }
     total_amount, new_paid = _validate_payment_bounds(payload.total or 0.0, payload.paid or 0.0)
     payment_delta = new_paid - prev_paid
     norm_items = _enrich_item_snapshots(_normalize_items(payload.items), db)
@@ -599,7 +611,7 @@ def update_transaction(transaction_id: int, payload: TransactionCreate, db: Sess
 
 
 @router.delete("/transaction/{transaction_id}")
-def delete_transaction(transaction_id: int, db: Session = Depends(get_db)):
+def delete_transaction(transaction_id: int, user_id: int = 0, db: Session = Depends(get_db)):
     t = db.query(Transaction).filter(Transaction.id == transaction_id).first()
     if not t:
         raise HTTPException(status_code=404, detail="Transaction not found")
@@ -621,8 +633,17 @@ def delete_transaction(transaction_id: int, db: Session = Depends(get_db)):
             except Exception:
                 pass
     rows = db.query(TransactionPayment).filter(TransactionPayment.transaction_id == transaction_id).all()
+    payments_total = sum(float(p.amount or 0.0) for p in rows or [])
     for p in rows:
         db.delete(p)
+    before = {
+        "customer_id": int(t.customer_id or 0),
+        "total": float(t.total or 0.0),
+        "paid": float(t.paid or 0.0),
+        "discount": float(t.discount or 0.0),
+        "status": int(t.status or 0),
+        "payments_total": float(payments_total),
+    }
     db.delete(t)
     db.commit()
     rebuild_and_persist_cogs_allocations(db)

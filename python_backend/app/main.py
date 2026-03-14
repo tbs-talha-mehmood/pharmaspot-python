@@ -28,12 +28,6 @@ def create_app() -> FastAPI:
     app.include_router(held_sales.router)
     app.include_router(reports.router)
 
-    @app.get("/")
-    def root():
-        return {"message": "POS Server Online."}
-
-    return app
-
 
 def _ensure_schema_updates() -> None:
     # Lightweight runtime schema patch for existing DBs.
@@ -73,6 +67,15 @@ def _ensure_schema_updates() -> None:
                         conn.execute(text("ALTER TABLE purchases ADD COLUMN paid FLOAT DEFAULT 0"))
                 except Exception:
                     pass
+        if "users" in tables:
+            user_cols = {c.get("name") for c in insp.get_columns("users")}
+            for col in ("perm_see_cost", "perm_give_discount", "perm_edit_invoice", "perm_delete_payment"):
+                if col not in user_cols:
+                    try:
+                        with engine.begin() as conn:
+                            conn.execute(text(f"ALTER TABLE users ADD COLUMN {col} BOOLEAN DEFAULT 0"))
+                    except Exception:
+                        pass
     except Exception:
         # Keep startup resilient if DB user lacks ALTER permission.
         pass

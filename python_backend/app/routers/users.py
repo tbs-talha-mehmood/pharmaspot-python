@@ -62,6 +62,10 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
         perm_transactions=bool(user.perm_transactions),
         perm_users=bool(user.perm_users),
         perm_settings=bool(user.perm_settings),
+        perm_see_cost=bool(getattr(user, "perm_see_cost", False)),
+        perm_give_discount=bool(getattr(user, "perm_give_discount", False)),
+        perm_edit_invoice=bool(getattr(user, "perm_edit_invoice", False)),
+        perm_delete_payment=bool(getattr(user, "perm_delete_payment", False)),
     )
 
 
@@ -70,11 +74,18 @@ def create_or_update(user_in: UserCreate, db: Session = Depends(get_db)):
     # If username exists, update; else create new with next id
     user = db.query(User).filter(User.username == user_in.username).first()
     if user:
+        # Never downgrade the built-in admin; it always keeps full access.
+        is_admin = bool(user.id == 1 or (user.username or "").lower() == "admin")
         user.fullname = user_in.fullname or ""
-        user.perm_products = bool(user_in.perm_products)
-        user.perm_transactions = bool(user_in.perm_transactions)
-        user.perm_users = bool(user_in.perm_users)
-        user.perm_settings = bool(user_in.perm_settings)
+        if not is_admin:
+            user.perm_products = bool(user_in.perm_products)
+            user.perm_transactions = bool(user_in.perm_transactions)
+            user.perm_users = bool(user_in.perm_users)
+            user.perm_settings = bool(user_in.perm_settings)
+            user.perm_see_cost = bool(user_in.perm_see_cost)
+            user.perm_give_discount = bool(user_in.perm_give_discount)
+            user.perm_edit_invoice = bool(user_in.perm_edit_invoice)
+            user.perm_delete_payment = bool(user_in.perm_delete_payment)
         if user_in.password:
             user.password_hash = hash_password(user_in.password)
         db.add(user)
@@ -82,14 +93,19 @@ def create_or_update(user_in: UserCreate, db: Session = Depends(get_db)):
         db.refresh(user)
         return user
     else:
+        is_admin = (user_in.username or "").lower() == "admin"
         new_user = User(
             username=user_in.username,
             fullname=user_in.fullname or "",
             password_hash=hash_password(user_in.password),
-            perm_products=bool(user_in.perm_products),
-            perm_transactions=bool(user_in.perm_transactions),
-            perm_users=bool(user_in.perm_users),
-            perm_settings=bool(user_in.perm_settings),
+            perm_products=True if is_admin else bool(user_in.perm_products),
+            perm_transactions=True if is_admin else bool(user_in.perm_transactions),
+            perm_users=True if is_admin else bool(user_in.perm_users),
+            perm_settings=True if is_admin else bool(user_in.perm_settings),
+            perm_see_cost=True if is_admin else bool(user_in.perm_see_cost),
+            perm_give_discount=True if is_admin else bool(user_in.perm_give_discount),
+            perm_edit_invoice=True if is_admin else bool(user_in.perm_edit_invoice),
+            perm_delete_payment=True if is_admin else bool(user_in.perm_delete_payment),
         )
         db.add(new_user)
         db.commit()
@@ -111,6 +127,10 @@ def ensure_admin(db: Session = Depends(get_db)):
             perm_transactions=True,
             perm_users=True,
             perm_settings=True,
+            perm_see_cost=True,
+            perm_give_discount=True,
+            perm_edit_invoice=True,
+            perm_delete_payment=True,
         )
         db.add(admin)
         db.commit()
