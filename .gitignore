@@ -13,3 +13,11 @@ env/
 # OS artifacts
 .DS_Store
 Thumbs.db
+
+# Build artifacts
+build/
+dist/
+
+# Logs and temp files
+*.log
+*.tmp
