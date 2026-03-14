@@ -7,6 +7,13 @@ from sqlalchemy.sql import func
 from .database import Base
 
 
+if MYSQL_LONGTEXT is not None:
+    # Use a dialect-aware type: LONGTEXT on MySQL, plain Text elsewhere.
+    JSON_TEXT_TYPE = Text().with_variant(MYSQL_LONGTEXT(), "mysql")  # type: ignore[arg-type]
+else:  # pragma: no cover - MySQL dialect not installed
+    JSON_TEXT_TYPE = Text()
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -88,7 +95,7 @@ class Purchase(Base):
     total = Column(Float, default=0.0)
     paid = Column(Float, default=0.0)
     # Use LONGTEXT on MySQL to accommodate large payloads; Text elsewhere
-    items_json = Column(MYSQL_LONGTEXT if MYSQL_LONGTEXT is not None else Text, default="[]")
+    items_json = Column(JSON_TEXT_TYPE, default="[]")
 
 
 class PurchasePayment(Base):
@@ -116,7 +123,7 @@ class Transaction(Base):
     paid = Column(Float, default=0.0)
     discount = Column(Float, default=0.0)
     # Match purchases: allow large payloads on MySQL
-    items_json = Column(MYSQL_LONGTEXT if MYSQL_LONGTEXT is not None else Text, default="[]")
+    items_json = Column(JSON_TEXT_TYPE, default="[]")
     inventory_deducted = Column(Boolean, default=False)
 
 
@@ -129,7 +136,7 @@ class HeldSale(Base):
     customer_id = Column(Integer, default=0)
     discount = Column(Float, default=0.0)
     paid = Column(Float, default=0.0)
-    items_json = Column(MYSQL_LONGTEXT if MYSQL_LONGTEXT is not None else Text, default="[]")
+    items_json = Column(JSON_TEXT_TYPE, default="[]")
 
 
 class TransactionPayment(Base):
