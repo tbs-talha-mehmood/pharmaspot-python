@@ -10,14 +10,21 @@ try:
     from dotenv import load_dotenv  # type: ignore
 
     try:
-        # In frozen builds, prefer external .env next to the executable.
-        # This avoids accidentally reading bundled build-time .env values.
         if getattr(sys, "frozen", False):
-            _EXE_ENV_PATH = Path(sys.executable).resolve().parent / "python_backend" / ".env"
-            if _EXE_ENV_PATH.exists():
-                load_dotenv(dotenv_path=_EXE_ENV_PATH)
+            # Frozen build: first look for an external .env next to the EXE,
+            # then fall back to a bundled copy under the PyInstaller _MEIPASS dir.
+            _exe_dir = Path(sys.executable).resolve().parent
+            _external_env = _exe_dir / "python_backend" / ".env"
+            if _external_env.exists():
+                load_dotenv(dotenv_path=_external_env)
+            else:
+                _meipass = getattr(sys, "_MEIPASS", None)
+                if _meipass:
+                    _bundled_env = Path(_meipass) / "python_backend" / ".env"
+                    if _bundled_env.exists():
+                        load_dotenv(dotenv_path=_bundled_env)
         else:
-            # Prefer python_backend/.env relative to this file during development.
+            # Development: prefer python_backend/.env relative to this file.
             _ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
             if _ENV_PATH.exists():
                 load_dotenv(dotenv_path=_ENV_PATH)

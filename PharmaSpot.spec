@@ -15,7 +15,11 @@ a = Analysis(
     ['py_client\\main.py'],
     pathex=['py_client', '.'],
     binaries=[],
-    datas=[('py_client/assets', 'assets')],
+    datas=[
+        ('py_client/assets', 'assets'),
+        # Ship backend .env so the frozen build uses the same DB config.
+        ('python_backend/.env', 'python_backend'),
+    ],
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
