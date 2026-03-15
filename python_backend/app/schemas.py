@@ -195,6 +195,7 @@ class PurchaseOut(BaseModel):
     paid: float
     due: float
     items: list[PurchaseItem]
+    used_in_sales: bool = False
 
     class Config:
         from_attributes = True

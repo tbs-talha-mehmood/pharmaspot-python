@@ -706,8 +706,22 @@ class PurchasesView(QtWidgets.QWidget):
                 self.api.purchase_update(int(self._edit_purchase_id), payload)
                 QtWidgets.QMessageBox.information(self, "Saved", "Purchase updated")
             else:
-                self.api.purchase_new(payload)
-                QtWidgets.QMessageBox.information(self, "Saved", "Purchase saved")
+                resp = self.api.purchase_new(payload) or {}
+                # If this purchase immediately gets used in COGS to cover
+                # previous sales, warn the user that it cannot be edited or
+                # deleted later.
+                if bool((resp or {}).get("used_in_sales")):
+                    QtWidgets.QMessageBox.information(
+                        self,
+                        "Purchase locked",
+                        (
+                            "This purchase was used to cover previous sales cost and "
+                            "cannot be edited or deleted later. To correct it, post "
+                            "an additional adjustment purchase instead."
+                        ),
+                    )
+                else:
+                    QtWidgets.QMessageBox.information(self, "Saved", "Purchase saved")
             self._clear_items()
             self._exit_edit_mode()
             self.refresh_history()

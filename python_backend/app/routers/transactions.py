@@ -1,12 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from typing import List, Dict, Any
 import json
 from datetime import datetime
 import math
 
 from ..database import get_db, Base, engine
-from ..models import Transaction, Product, TransactionPayment
+from ..models import Transaction, Product, TransactionPayment, TransactionCOGSAllocation
 from ..schemas import (
     TransactionCreate,
     TransactionOut,
@@ -18,7 +19,7 @@ from ..schemas import (
     CustomerPaymentAllocationOut,
 )
 from ..services.period_lock import ensure_not_locked_for_date, parse_date_like
-from ..services.cogs import rebuild_and_persist_cogs_allocations
+from ..services.cogs import allocate_cogs_for_transaction
 
 
 Base.metadata.create_all(bind=engine)
@@ -323,7 +324,7 @@ def create_transaction(payload: TransactionCreate, db: Session = Depends(get_db)
     )
     db.commit()
     db.refresh(obj)
-    rebuild_and_persist_cogs_allocations(db)
+    allocate_cogs_for_transaction(db, int(obj.id or 0))
     return _to_dict(obj)
 
 
@@ -365,8 +366,60 @@ def list_transactions_page(
     start = (page - 1) * page_size
     end = start + page_size
     items = filtered[start:end]
+
+    # Aggregate COGS/profit per transaction from COGS allocations.
+    ids = [int(t.id or 0) for t in items if int(t.id or 0) > 0]
+    stats_by_tx: Dict[int, Dict[str, float]] = {}
+    if ids:
+        alloc_rows = (
+            db.query(TransactionCOGSAllocation)
+            .filter(TransactionCOGSAllocation.transaction_id.in_(ids))
+            .all()
+        )
+        for a in alloc_rows:
+            try:
+                tx_id = int(a.transaction_id or 0)
+            except Exception:
+                continue
+            if tx_id <= 0:
+                continue
+            slot = stats_by_tx.setdefault(
+                tx_id,
+                {"cogs": 0.0, "profit": 0.0, "realized": 0.0, "provisional": 0.0},
+            )
+            try:
+                cost = float(a.cost_amount or 0.0)
+            except Exception:
+                cost = 0.0
+            try:
+                profit_val = float(a.profit_amount or 0.0)
+            except Exception:
+                profit_val = 0.0
+            slot["cogs"] += cost
+            slot["profit"] += profit_val
+            if bool(getattr(a, "provisional", False)):
+                slot["provisional"] += profit_val
+            else:
+                slot["realized"] += profit_val
+
+    payload_items: List[Dict[str, Any]] = []
+    for t in items:
+        dto = _to_dict(t)
+        try:
+            row = dto.model_dump()
+        except Exception:
+            # Pydantic v1 fallback
+            row = dto.dict()
+        tx_id = int(row.get("id", 0) or 0)
+        stats = stats_by_tx.get(tx_id, {}) or {}
+        row["cogs"] = float(stats.get("cogs", 0.0) or 0.0)
+        row["profit"] = float(stats.get("profit", 0.0) or 0.0)
+        row["realized"] = float(stats.get("realized", 0.0) or 0.0)
+        row["provisional"] = float(stats.get("provisional", 0.0) or 0.0)
+        payload_items.append(row)
+
     return {
-        "items": [_to_dict(t) for t in items],
+        "items": payload_items,
         "total": total,
         "page": page,
         "page_size": page_size,
@@ -606,7 +659,7 @@ def update_transaction(transaction_id: int, payload: TransactionCreate, db: Sess
     db.add(t)
     db.commit()
     db.refresh(t)
-    rebuild_and_persist_cogs_allocations(db)
+    allocate_cogs_for_transaction(db, int(t.id or 0))
     return _to_dict(t)
 
 
@@ -644,9 +697,15 @@ def delete_transaction(transaction_id: int, user_id: int = 0, db: Session = Depe
         "status": int(t.status or 0),
         "payments_total": float(payments_total),
     }
+    # Free COGS allocations for this invoice but keep older allocations
+    # intact so their purchase links remain stable.
+    (
+        db.query(TransactionCOGSAllocation)
+        .filter(TransactionCOGSAllocation.transaction_id == int(transaction_id))
+        .delete(synchronize_session=False)
+    )
     db.delete(t)
     db.commit()
-    rebuild_and_persist_cogs_allocations(db)
     return {"ok": True}
 
 @router.delete("/transaction/{transaction_id}/payment/{payment_id}", response_model=TransactionOut)

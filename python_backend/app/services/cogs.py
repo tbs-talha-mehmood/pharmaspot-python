@@ -573,6 +573,392 @@ def build_profit_reconciliation(
     }
 
 
+def estimate_product_fifo_cost(
+    db: Session,
+    product_id: int,
+    quantity: float,
+) -> dict:
+    """Estimate cost for the *next* sale quantity of a product using FIFO lots.
+
+    The algorithm:
+    - Reads all purchases for the product and computes purchased_qty and value per purchase.
+    - Reads TransactionCOGSAllocation to see how much of each purchase has already been consumed.
+    - Builds remaining lots per purchase and applies FIFO across purchases to cover the requested
+      sale quantity. Any oversell tail falls back to the product-level cost hint.
+    """
+    pid = _to_int(product_id, 0)
+    qty = max(0.0, _to_float(quantity, 0.0))
+    if pid <= 0 or qty <= 1e-9:
+        return {
+            "product_id": int(pid),
+            "quantity": float(qty),
+            "unit_cost": 0.0,
+            "cost_total": 0.0,
+        }
+
+    # Aggregate purchased quantity and value per purchase for this product.
+    purchases = db.query(Purchase).all()
+    lots_raw: list[dict] = []
+    for p in purchases:
+        d = _parse_date(p.date or "")
+        items = _parse_json_array(p.items_json or "[]")
+        total_qty = 0.0
+        total_val = 0.0
+        for it in items:
+            if _to_int(it.get("product_id", 0), 0) != pid:
+                continue
+            item_qty = max(0.0, _to_float(it.get("quantity", 0), 0.0))
+            if item_qty <= 1e-9:
+                continue
+            unit_cost = _purchase_unit_cost(it)
+            total_qty += item_qty
+            total_val += item_qty * unit_cost
+        if total_qty <= 1e-9:
+            continue
+        lots_raw.append(
+            {
+                "purchase_id": _to_int(getattr(p, "id", 0), 0),
+                "supplier_id": _to_int(getattr(p, "supplier_id", 0), 0),
+                "date": d,
+                "purchased_qty": float(total_qty),
+                "purchased_value": float(total_val),
+            }
+        )
+
+    def _fallback_hint() -> float:
+        prod = db.query(Product).filter(Product.id == pid).first()
+        if not prod:
+            return 0.0
+        return max(0.0, _to_float(_product_cost_hint(prod), 0.0))
+
+    if not lots_raw:
+        unit_cost = _fallback_hint()
+        return {
+            "product_id": int(pid),
+            "quantity": float(qty),
+            "unit_cost": float(unit_cost),
+            "cost_total": float(unit_cost * qty),
+        }
+
+    # How much of each purchase has already been consumed in COGS?
+    alloc_rows = (
+        db.query(
+            TransactionCOGSAllocation.source_purchase_id,
+            func.sum(TransactionCOGSAllocation.quantity),
+        )
+        .filter(
+            TransactionCOGSAllocation.product_id == pid,
+            TransactionCOGSAllocation.source_purchase_id != 0,
+        )
+        .group_by(TransactionCOGSAllocation.source_purchase_id)
+        .all()
+    )
+    allocated_by_purchase: dict[int, float] = {}
+    for pur_id, used_qty in alloc_rows:
+        allocated_by_purchase[_to_int(pur_id, 0)] = max(0.0, _to_float(used_qty, 0.0))
+
+    # Build remaining lots per purchase.
+    avail_lots: list[dict] = []
+    for lot in lots_raw:
+        pur_id = _to_int(lot.get("purchase_id", 0), 0)
+        purchased_qty = max(0.0, _to_float(lot.get("purchased_qty", 0.0), 0.0))
+        if pur_id <= 0 or purchased_qty <= 1e-9:
+            continue
+        allocated = max(0.0, _to_float(allocated_by_purchase.get(pur_id, 0.0), 0.0))
+        remaining = max(0.0, purchased_qty - allocated)
+        if remaining <= 1e-9:
+            continue
+        value = max(0.0, _to_float(lot.get("purchased_value", 0.0), 0.0))
+        unit_cost = max(0.0, value / purchased_qty) if purchased_qty > 1e-9 else 0.0
+        avail_lots.append(
+            {
+                "purchase_id": pur_id,
+                "supplier_id": _to_int(lot.get("supplier_id", 0), 0),
+                "date": lot.get("date"),
+                "remaining_qty": float(remaining),
+                "unit_cost": float(unit_cost),
+            }
+        )
+
+    if not avail_lots:
+        # All purchased stock has been consumed, but we still want a stable
+        # cost hint. Use the weighted-average cost of all historical purchases
+        # for this product before falling back to the product-level hint.
+        total_purchased_qty = sum(max(0.0, _to_float(l.get("purchased_qty", 0.0), 0.0)) for l in lots_raw)
+        total_purchased_val = sum(max(0.0, _to_float(l.get("purchased_value", 0.0), 0.0)) for l in lots_raw)
+        unit_cost = 0.0
+        if total_purchased_qty > 1e-9 and total_purchased_val >= 0.0:
+            unit_cost = max(0.0, total_purchased_val / total_purchased_qty)
+        if unit_cost <= 1e-9:
+            unit_cost = _fallback_hint()
+        return {
+            "product_id": int(pid),
+            "quantity": float(qty),
+            "unit_cost": float(unit_cost),
+            "cost_total": float(unit_cost * qty),
+        }
+
+    # FIFO across remaining lots.
+    avail_lots.sort(key=lambda lot: ((lot.get("date") or date.min), lot.get("purchase_id", 0)))
+    remaining_sale = qty
+    total_cost = 0.0
+    for lot in avail_lots:
+        if remaining_sale <= 1e-9:
+            break
+        lot_rem = max(0.0, _to_float(lot.get("remaining_qty", 0.0), 0.0))
+        if lot_rem <= 1e-9:
+            continue
+        take = min(remaining_sale, lot_rem)
+        if take <= 1e-9:
+            continue
+        unit_cost = max(0.0, _to_float(lot.get("unit_cost", 0.0), 0.0))
+        total_cost += take * unit_cost
+        remaining_sale -= take
+
+    if remaining_sale > 1e-9:
+        # Oversell tail: use product-level hint so we don't crash.
+        tail_unit = _fallback_hint()
+        total_cost += remaining_sale * tail_unit
+
+    unit_cost_overall = 0.0
+    if qty > 1e-9:
+        unit_cost_overall = max(0.0, total_cost / qty)
+
+    return {
+        "product_id": int(pid),
+        "quantity": float(qty),
+        "unit_cost": float(unit_cost_overall),
+        "cost_total": float(total_cost),
+    }
+
+
+def build_product_purchase_lots(
+    db: Session,
+    product_id: int,
+) -> dict:
+    """Return per-purchase remaining quantity lots for a product.
+
+    Each lot contains:
+    - purchase_id
+    - supplier_id
+    - date (ISO date string from purchase row)
+    - purchased_qty
+    - allocated_qty
+    - remaining_qty
+    - unit_cost (average unit cost within the purchase for that product)
+    """
+    pid = _to_int(product_id, 0)
+    if pid <= 0:
+        return {"product_id": int(pid), "lots": []}
+
+    purchases = db.query(Purchase).all()
+    lots_raw: list[dict] = []
+    for p in purchases:
+        raw_date = str(getattr(p, "date", "") or "")
+        items = _parse_json_array(p.items_json or "[]")
+        total_qty = 0.0
+        total_val = 0.0
+        for it in items:
+            if _to_int(it.get("product_id", 0), 0) != pid:
+                continue
+            item_qty = max(0.0, _to_float(it.get("quantity", 0), 0.0))
+            if item_qty <= 1e-9:
+                continue
+            unit_cost = _purchase_unit_cost(it)
+            total_qty += item_qty
+            total_val += item_qty * unit_cost
+        if total_qty <= 1e-9:
+            continue
+        lots_raw.append(
+            {
+                "purchase_id": _to_int(getattr(p, "id", 0), 0),
+                "supplier_id": _to_int(getattr(p, "supplier_id", 0), 0),
+                "date_str": raw_date,
+                "purchased_qty": float(total_qty),
+                "purchased_value": float(total_val),
+            }
+        )
+
+    if not lots_raw:
+        return {"product_id": int(pid), "lots": []}
+
+    alloc_rows = (
+        db.query(
+            TransactionCOGSAllocation.source_purchase_id,
+            func.sum(TransactionCOGSAllocation.quantity),
+        )
+        .filter(
+            TransactionCOGSAllocation.product_id == pid,
+            TransactionCOGSAllocation.source_purchase_id != 0,
+        )
+        .group_by(TransactionCOGSAllocation.source_purchase_id)
+        .all()
+    )
+    allocated_by_purchase: dict[int, float] = {}
+    for pur_id, used_qty in alloc_rows:
+        allocated_by_purchase[_to_int(pur_id, 0)] = max(0.0, _to_float(used_qty, 0.0))
+
+    lots: list[dict] = []
+    for lot in lots_raw:
+        pur_id = _to_int(lot.get("purchase_id", 0), 0)
+        purchased_qty = max(0.0, _to_float(lot.get("purchased_qty", 0.0), 0.0))
+        if pur_id <= 0 or purchased_qty <= 1e-9:
+            continue
+        allocated = max(0.0, _to_float(allocated_by_purchase.get(pur_id, 0.0), 0.0))
+        remaining = max(0.0, purchased_qty - allocated)
+        value = max(0.0, _to_float(lot.get("purchased_value", 0.0), 0.0))
+        unit_cost = max(0.0, value / purchased_qty) if purchased_qty > 1e-9 else 0.0
+        lots.append(
+            {
+                "purchase_id": pur_id,
+                "supplier_id": _to_int(lot.get("supplier_id", 0), 0),
+                "date": str(lot.get("date_str") or ""),
+                "purchased_qty": float(purchased_qty),
+                "allocated_qty": float(allocated),
+                "remaining_qty": float(remaining),
+                "unit_cost": float(unit_cost),
+            }
+        )
+
+    lots.sort(key=lambda row: (_parse_date(row.get("date", "")) or date.min, row.get("purchase_id", 0)))
+    return {"product_id": int(pid), "lots": lots}
+
+
+def allocate_cogs_for_transaction(db: Session, transaction_id: int) -> None:
+    """
+    Incrementally (re)allocate COGS rows for a single transaction.
+
+    Instead of rebuilding allocations for all invoices, this function:
+    - Removes existing TransactionCOGSAllocation rows for the given
+      transaction_id.
+    - Looks at current purchase lots minus allocations from *other*
+      transactions.
+    - Allocates this transaction's items on top of the remaining lots
+      using FIFO.
+
+    This preserves which purchases older invoices used when you delete
+    or edit another invoice.
+    """
+    tx_id = _to_int(transaction_id, 0)
+    if tx_id <= 0:
+        return
+
+    t = db.query(Transaction).filter(Transaction.id == tx_id).first()
+    if not t:
+        return
+
+    # Remove previous allocations for this transaction so they no longer
+    # count against remaining purchase quantities.
+    db.query(TransactionCOGSAllocation).filter(
+        TransactionCOGSAllocation.transaction_id == tx_id
+    ).delete(synchronize_session=False)
+
+    items = _parse_json_array(t.items_json or "[]")
+    if not items:
+        db.commit()
+        return
+
+    discount_pct = max(0.0, _to_float(getattr(t, "discount", 0.0), 0.0))
+    discount_factor = max(0.0, 1.0 - (discount_pct / 100.0))
+    tx_date_txt = str(t.date or "")
+    tx_user_id = _to_int(getattr(t, "user_id", 0), 0)
+
+    # Cache lots per product so multiple lines for the same product share
+    # a single remaining-quantity view.
+    lots_cache: dict[int, list[dict]] = {}
+
+    for item_index, it in enumerate(items):
+        pid = _to_int(it.get("id", 0), 0)
+        qty = max(0.0, _to_float(it.get("quantity", 0), 0.0))
+        if pid <= 0 or qty <= 1e-9:
+            continue
+
+        # Load remaining lots for this product using current allocations
+        # from *other* transactions.
+        if pid not in lots_cache:
+            lots_info = build_product_purchase_lots(db, product_id=pid) or {}
+            lots = list(lots_info.get("lots") or [])
+            lots.sort(
+                key=lambda lot: (
+                    _parse_date(lot.get("date", "")) or date.min,
+                    lot.get("purchase_id", 0),
+                )
+            )
+            lots_cache[pid] = lots
+        lots = lots_cache[pid]
+
+        unit_sale_base = _sale_unit_price(it)
+        unit_sale = max(0.0, unit_sale_base * discount_factor)
+
+        remaining = qty
+        # Allocate from concrete purchase lots first.
+        for lot in lots:
+            if remaining <= 1e-9:
+                break
+            lot_rem = max(0.0, _to_float(lot.get("remaining_qty", 0.0), 0.0))
+            if lot_rem <= 1e-9:
+                continue
+            take = min(remaining, lot_rem)
+            if take <= 1e-9:
+                continue
+            unit_cost = max(0.0, _to_float(lot.get("unit_cost", 0.0), 0.0))
+            sale_amount = float(take) * unit_sale
+            cost_amount = float(take) * unit_cost
+            db.add(
+                TransactionCOGSAllocation(
+                    transaction_id=int(tx_id),
+                    transaction_item_index=int(item_index),
+                    transaction_date=tx_date_txt,
+                    user_id=int(tx_user_id),
+                    product_id=int(pid),
+                    quantity=float(take),
+                    unit_sale=float(unit_sale),
+                    unit_cost=float(unit_cost),
+                    sale_amount=float(sale_amount),
+                    cost_amount=float(cost_amount),
+                    profit_amount=float(sale_amount - cost_amount),
+                    source_purchase_id=int(lot.get("purchase_id", 0) or 0),
+                    source_supplier_id=int(lot.get("supplier_id", 0) or 0),
+                    provisional=False,
+                    settled=True,
+                )
+            )
+            lot["remaining_qty"] = float(lot_rem - take)
+            remaining -= float(take)
+
+        if remaining > 1e-9:
+            # Oversell tail: use a stable product-level cost hint and
+            # mark as provisional (no specific purchase).
+            prod = db.query(Product).filter(Product.id == pid).first()
+            hint_unit = 0.0
+            if prod:
+                hint_unit = max(0.0, _to_float(_product_cost_hint(prod), 0.0))
+            unit_cost = hint_unit
+            sale_amount = float(remaining) * unit_sale
+            cost_amount = float(remaining) * unit_cost
+            db.add(
+                TransactionCOGSAllocation(
+                    transaction_id=int(tx_id),
+                    transaction_item_index=int(item_index),
+                    transaction_date=tx_date_txt,
+                    user_id=int(tx_user_id),
+                    product_id=int(pid),
+                    quantity=float(remaining),
+                    unit_sale=float(unit_sale),
+                    unit_cost=float(unit_cost),
+                    sale_amount=float(sale_amount),
+                    cost_amount=float(cost_amount),
+                    profit_amount=float(sale_amount - cost_amount),
+                    source_purchase_id=0,
+                    source_supplier_id=0,
+                    provisional=True,
+                    settled=True,
+                )
+            )
+
+    db.commit()
+
+
 def build_company_inventory_snapshot(
     db: Session,
     include_inactive: bool = False,

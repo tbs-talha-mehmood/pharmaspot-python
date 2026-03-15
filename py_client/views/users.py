@@ -1,4 +1,4 @@
-from PyQt5 import QtWidgets
+from PyQt5 import QtWidgets, QtCore
 from .ui_common import (
     apply_form_layout,
     apply_header_layout,
@@ -25,8 +25,11 @@ class UsersView(QtWidgets.QWidget):
         header = QtWidgets.QHBoxLayout()
         apply_header_layout(header)
         self.btn_add = QtWidgets.QPushButton("Add User")
+        self.btn_edit = QtWidgets.QPushButton("Edit User")
         set_accent(self.btn_add)
+        set_secondary(self.btn_edit)
         header.addWidget(self.btn_add)
+        header.addWidget(self.btn_edit)
         header.addStretch(1)
         layout.addLayout(header)
 
@@ -36,6 +39,8 @@ class UsersView(QtWidgets.QWidget):
         layout.addWidget(self.table)
 
         self.btn_add.clicked.connect(self.add_user_dialog)
+        self.btn_edit.clicked.connect(self.edit_user_dialog)
+        self.table.itemDoubleClicked.connect(self._edit_user_from_row)
         polish_controls(self)
 
     def refresh(self):
@@ -49,20 +54,27 @@ class UsersView(QtWidgets.QWidget):
         for u in users:
             r = self.table.rowCount()
             self.table.insertRow(r)
-            self.table.setItem(r, 0, QtWidgets.QTableWidgetItem(str(u.get("id"))))
+            id_item = QtWidgets.QTableWidgetItem(str(u.get("id")))
+            # Store full user payload to drive edit dialog.
+            id_item.setData(QtCore.Qt.UserRole, u)
+            self.table.setItem(r, 0, id_item)
             self.table.setItem(r, 1, QtWidgets.QTableWidgetItem(u.get("username", "")))
             self.table.setItem(r, 2, QtWidgets.QTableWidgetItem(u.get("fullname", "")))
 
-    def add_user_dialog(self):
+    def _open_user_dialog(self, user: dict | None = None):
         d = QtWidgets.QDialog(self)
-        d.setWindowTitle("Add User")
+        is_edit = bool(user)
+        d.setWindowTitle("Edit User" if is_edit else "Add User")
         form = QtWidgets.QFormLayout(d)
         apply_form_layout(form)
         username = QtWidgets.QLineEdit()
         username.setPlaceholderText("username")
         fullname = QtWidgets.QLineEdit()
         fullname.setPlaceholderText("Full name")
-        password = QtWidgets.QLineEdit(); password.setEchoMode(QtWidgets.QLineEdit.Password)
+        password = QtWidgets.QLineEdit()
+        password.setEchoMode(QtWidgets.QLineEdit.Password)
+        if is_edit:
+            password.setPlaceholderText("Leave blank to keep current password")
         p_products = QtWidgets.QCheckBox()
         p_transactions = QtWidgets.QCheckBox()
         p_users = QtWidgets.QCheckBox()
@@ -84,6 +96,21 @@ class UsersView(QtWidgets.QWidget):
         form.addRow("Can Delete Payments", p_delete_payment)
         btns = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
         form.addRow(btns)
+
+        # Pre-fill when editing an existing user
+        if is_edit:
+            username.setText(str(user.get("username", "") or ""))
+            username.setEnabled(False)
+            fullname.setText(str(user.get("fullname", "") or ""))
+            p_products.setChecked(bool(user.get("perm_products", False)))
+            p_transactions.setChecked(bool(user.get("perm_transactions", False)))
+            p_users.setChecked(bool(user.get("perm_users", False)))
+            p_settings.setChecked(bool(user.get("perm_settings", False)))
+            p_see_cost.setChecked(bool(user.get("perm_see_cost", False)))
+            p_give_discount.setChecked(bool(user.get("perm_give_discount", False)))
+            p_edit_invoice.setChecked(bool(user.get("perm_edit_invoice", False)))
+            p_delete_payment.setChecked(bool(user.get("perm_delete_payment", False)))
+
         btns.accepted.connect(d.accept)
         btns.rejected.connect(d.reject)
         polish_controls(d)
@@ -107,3 +134,33 @@ class UsersView(QtWidgets.QWidget):
                 self.refresh()
             except Exception as e:
                 QtWidgets.QMessageBox.critical(self, "Error", str(e))
+
+    def add_user_dialog(self):
+        self._open_user_dialog(None)
+
+    def _selected_user_payload(self) -> dict | None:
+        r = self.table.currentRow()
+        if r < 0:
+            return None
+        item = self.table.item(r, 0)
+        if not item:
+            return None
+        data = item.data(QtCore.Qt.UserRole)
+        return data if isinstance(data, dict) else None
+
+    def edit_user_dialog(self):
+        user = self._selected_user_payload()
+        if not user:
+            QtWidgets.QMessageBox.information(self, "Select User", "Select a user row to edit.")
+            return
+        self._open_user_dialog(user)
+
+    def _edit_user_from_row(self, item: QtWidgets.QTableWidgetItem):
+        # Double-click on any cell edits that user.
+        row = item.row()
+        id_item = self.table.item(row, 0)
+        if not id_item:
+            return
+        data = id_item.data(QtCore.Qt.UserRole)
+        if isinstance(data, dict):
+            self._open_user_dialog(data)

@@ -6,6 +6,27 @@ class ApiClient:
     def __init__(self, base_url: str):
         self.base_url = base_url.rstrip("/")
 
+    def _json_or_error(self, response):
+        """
+        Return response JSON or raise an Exception with a friendly
+        message when the backend returns an error status.
+
+        This is used for write actions (POST/PUT/DELETE) so views can
+        show clear messages such as period-lock blocking.
+        """
+        try:
+            data = response.json()
+        except ValueError:
+            data = None
+        if response.status_code >= 400:
+            msg = ""
+            if isinstance(data, dict):
+                msg = str(data.get("detail") or data.get("message") or "")
+            if not msg:
+                msg = response.text or f"HTTP {response.status_code}"
+            raise Exception(msg)
+        return data if data is not None else {}
+
     def get(self, path: str, **kwargs):
         return requests.get(self.base_url + path, **kwargs)
 
@@ -175,14 +196,17 @@ class ApiClient:
         return self.get(f"/api/purchases/purchase/{int(purchase_id)}").json()
 
     def purchase_new(self, payload: dict):
-        return self.post_json("/api/purchases/new", payload).json()
+        r = self.post_json("/api/purchases/new", payload)
+        return self._json_or_error(r)
 
     def purchase_update(self, purchase_id: int, payload: dict):
-        return requests.put(self.base_url + f"/api/purchases/purchase/{purchase_id}", json=payload).json()
+        r = requests.put(self.base_url + f"/api/purchases/purchase/{purchase_id}", json=payload)
+        return self._json_or_error(r)
 
     def purchase_delete(self, purchase_id: int, user_id: int = 0):
         suffix = f"?user_id={int(user_id)}" if int(user_id or 0) > 0 else ""
-        return requests.delete(self.base_url + f"/api/purchases/purchase/{int(purchase_id)}{suffix}").json()
+        r = requests.delete(self.base_url + f"/api/purchases/purchase/{int(purchase_id)}{suffix}")
+        return self._json_or_error(r)
 
     def purchase_payments_list(self):
         return self.get("/api/purchases/payments").json()
@@ -200,7 +224,8 @@ class ApiClient:
         payload = {"amount": float(amount), "user_id": int(user_id or 0)}
         if date:
             payload["date"] = str(date)
-        return self.post_json(f"/api/purchases/supplier/{int(supplier_id)}/payment", payload).json()
+        r = self.post_json(f"/api/purchases/supplier/{int(supplier_id)}/payment", payload)
+        return self._json_or_error(r)
 
     # Held Sales
     def held_sales_list(self):
@@ -241,7 +266,8 @@ class ApiClient:
         payload = {"amount": float(amount), "user_id": int(user_id or 0)}
         if date:
             payload["date"] = str(date)
-        return self.post_json(f"/api/transactions/customer/{int(customer_id)}/payment", payload).json()
+        r = self.post_json(f"/api/transactions/customer/{int(customer_id)}/payment", payload)
+        return self._json_or_error(r)
 
     def transaction_get(self, tid: int):
         return self.get(f"/api/transactions/transaction/{int(tid)}").json()
@@ -254,20 +280,24 @@ class ApiClient:
 
     def transaction_payment_update(self, tid: int, payment_id: int, amount: float, user_id: int = 0):
         suffix = f"?user_id={int(user_id)}" if int(user_id or 0) > 0 else ""
-        return requests.put(
+        r = requests.put(
             self.base_url + f"/api/transactions/transaction/{int(tid)}/payment/{int(payment_id)}{suffix}",
             json={"amount": float(amount)},
-        ).json()
+        )
+        return self._json_or_error(r)
 
     def transaction_new(self, payload: dict):
-        return self.post_json("/api/transactions/new", payload).json()
+        r = self.post_json("/api/transactions/new", payload)
+        return self._json_or_error(r)
 
     def transaction_update(self, tid: int, payload: dict):
-        return requests.put(self.base_url + f"/api/transactions/transaction/{int(tid)}", json=payload).json()
+        r = requests.put(self.base_url + f"/api/transactions/transaction/{int(tid)}", json=payload)
+        return self._json_or_error(r)
 
     def transaction_delete(self, tid: int, user_id: int = 0):
         suffix = f"?user_id={int(user_id)}" if int(user_id or 0) > 0 else ""
-        return requests.delete(self.base_url + f"/api/transactions/transaction/{int(tid)}{suffix}").json()
+        r = requests.delete(self.base_url + f"/api/transactions/transaction/{int(tid)}{suffix}")
+        return self._json_or_error(r)
 
     # Reports
     def profit_reconciliation(self, start_date: str = "", end_date: str = "", user_id: int = 0):
@@ -290,21 +320,34 @@ class ApiClient:
         suffix = f"?{'&'.join(params)}" if params else ""
         return self.get(f"/api/reports/company_inventory{suffix}").json()
 
+    def product_margin_preview(self, product_id: int, quantity: float = 1.0):
+        params = [f"product_id={int(product_id)}", f"quantity={float(quantity)}"]
+        suffix = f"?{'&'.join(params)}"
+        return self.get(f"/api/reports/product_margin_preview{suffix}").json()
+
+    def product_purchase_lots(self, product_id: int):
+        params = [f"product_id={int(product_id)}"]
+        suffix = f"?{'&'.join(params)}"
+        return self.get(f"/api/reports/product_purchase_lots{suffix}").json()
+
 
     def purchase_payment_update(self, purchase_id: int, payment_id: int, amount: float, user_id: int = 0):
         suffix = f"?user_id={int(user_id)}" if int(user_id or 0) > 0 else ""
-        return requests.put(
+        r = requests.put(
             self.base_url + f"/api/purchases/purchase/{int(purchase_id)}/payment/{int(payment_id)}{suffix}",
             json={"amount": float(amount)},
-        ).json()
+        )
+        return self._json_or_error(r)
 
     def transaction_payment_delete(self, tid: int, payment_id: int, user_id: int = 0):
         # Prefer the ID-only endpoint on the backend; tid is ignored but
         # kept for backwards compatibility with existing callers.
         suffix = f"?user_id={int(user_id)}" if int(user_id or 0) > 0 else ""
-        return requests.delete(self.base_url + f"/api/transactions/payment/{int(payment_id)}{suffix}").json()
+        r = requests.delete(self.base_url + f"/api/transactions/payment/{int(payment_id)}{suffix}")
+        return self._json_or_error(r)
 
     def purchase_payment_delete(self, purchase_id: int, payment_id: int, user_id: int = 0):
         # Prefer the ID-only endpoint for symmetry with transaction payments.
         suffix = f"?user_id={int(user_id)}" if int(user_id or 0) > 0 else ""
-        return requests.delete(self.base_url + f"/api/purchases/payment/{int(payment_id)}{suffix}").json()
+        r = requests.delete(self.base_url + f"/api/purchases/payment/{int(payment_id)}{suffix}")
+        return self._json_or_error(r)

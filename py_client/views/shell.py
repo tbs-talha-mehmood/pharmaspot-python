@@ -109,6 +109,7 @@ class ShellView(QtWidgets.QWidget):
 
         can_products = bool(user.get("perm_products", False) or is_admin)
         can_see_cost = bool(user.get("perm_see_cost", False) or is_admin)
+        can_transactions = bool(user.get("perm_transactions", False) or is_admin)
         can_settings = bool(
             user.get("perm_settings", False)
             or user.get("perm_users", False)
@@ -125,11 +126,12 @@ class ShellView(QtWidgets.QWidget):
 
         _set_nav_visible("Products", can_products)
         _set_nav_visible("Dashboard", can_see_cost)
+        _set_nav_visible("Point of Sale", can_transactions)
         _set_nav_visible("Companies", True)
         _set_nav_visible("Suppliers", True)
         _set_nav_visible("Customers", True)
-        _set_nav_visible("Purchases", True)
-        _set_nav_visible("Transactions", True)
+        _set_nav_visible("Purchases", can_transactions)
+        _set_nav_visible("Transactions", can_transactions)
         _set_nav_visible("Reports", can_see_cost)
         _set_nav_visible("Settings", can_settings)
 

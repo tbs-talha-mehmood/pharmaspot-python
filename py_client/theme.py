@@ -240,33 +240,34 @@ QTableWidget::item {
     color: #edf4ff;
 }
 QTableWidget#posCartTable::item {
-    padding: 5px 10px;
-    font-size: 14px;
-    color: #f4f8ff;
+    padding: 6px 10px;
+    font-size: 15px;
+    color: #ffffff;
 }
 QTableWidget QAbstractSpinBox#cartEditor {
-    background: #1a2434;
-    border: 1px solid #324055;
-    border-radius: 6px;
-    padding: 2px 8px;
-    margin: 1px 2px;
-    color: #f2f7ff;
-    font-size: 14px;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    padding: 0 4px;
+    margin: 0;
+    color: #ffffff;
+    font-size: 15px;
     font-weight: 600;
 }
 QTableWidget QAbstractSpinBox#cartEditor QLineEdit {
     background: transparent;
-    color: #f7fbff;
+    color: inherit;
     selection-background-color: rgba(98, 160, 255, 0.45);
 }
 QTableWidget QAbstractSpinBox#cartEditor:focus {
-    border: 1px solid #62a0ff;
-    background: #172132;
+    border: 1px solid #000000;
+    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.28);
 }
 QTableWidget QAbstractSpinBox#cartEditor:disabled {
-    color: #f2f7ff;
-    background: #213047;
-    border: 1px solid #3e5475;
+    color: #d0d8e8;
+    background: transparent;
+    border: none;
 }
 
 QSpinBox[overstock_warned="true"] {

@@ -63,6 +63,7 @@ def _to_dict(p: Purchase) -> PurchaseOut:
         paid=paid_amount,
         due=due_amount,
         items=items,
+        used_in_sales=False,
     )
 
 
@@ -295,7 +296,18 @@ def create_purchase(payload: PurchaseCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(obj)
     rebuild_and_persist_cogs_allocations(db)
-    return _to_dict(obj)
+    # Check whether this purchase is now used in any COGS allocations.
+    linked_alloc = (
+        db.query(TransactionCOGSAllocation.id)
+        .filter(TransactionCOGSAllocation.source_purchase_id == int(obj.id or 0))
+        .first()
+    )
+    out = _to_dict(obj)
+    try:
+        out.used_in_sales = bool(linked_alloc is not None)
+    except Exception:
+        pass
+    return out
 
 
 @router.get("/list", response_model=List[PurchaseOut])
@@ -339,6 +351,21 @@ def update_purchase(purchase_id: int, payload: PurchaseCreate, db: Session = Dep
         raise HTTPException(status_code=404, detail="Purchase not found")
     ensure_not_locked_for_date(db, parse_date_like(p.date or ""), "Updating purchase")
     ensure_not_locked_for_date(db, parse_date_like(payload.date or p.date or ""), "Updating purchase")
+    # Block edits once this purchase has contributed to sales profit.
+    linked_alloc = (
+        db.query(TransactionCOGSAllocation.id)
+        .filter(TransactionCOGSAllocation.source_purchase_id == int(purchase_id))
+        .first()
+    )
+    if linked_alloc:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Cannot edit this purchase because its cost is already used in sales profit. "
+                "Post an adjustment purchase instead."
+            ),
+        )
+
     prev_paid = max(0.0, float(p.paid or 0.0))
     requested_total = payload.total if payload.total is not None else float(p.total or 0.0)
     requested_paid = prev_paid if payload.paid is None else float(payload.paid or 0.0)

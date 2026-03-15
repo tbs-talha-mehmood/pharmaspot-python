@@ -53,36 +53,51 @@ class TransactionsView(QtWidgets.QWidget):
         header.addWidget(self.user_filter)
 
         self.btn_reset = QtWidgets.QPushButton("Reset Filters")
-        self.btn_payments = QtWidgets.QPushButton("Payments")
         self.btn_delete = QtWidgets.QPushButton("Delete")
-        set_secondary(self.btn_reset, self.btn_payments)
+        set_secondary(self.btn_reset)
         set_danger(self.btn_delete)
         header.addWidget(self.btn_reset)
-        header.addWidget(self.btn_payments)
         header.addWidget(self.btn_delete)
         header.addStretch(1)
         layout.addLayout(header)
 
-        self.table = QtWidgets.QTableWidget(0, 9)
+        self.table = QtWidgets.QTableWidget(0, 13)
         self.table.setHorizontalHeaderLabels(
-            ["Invoice #", "Date", "Time", "User", "Customer", "Total", "Paid", "Due", "Discount"]
+            [
+                "Invoice #",
+                "Date",
+                "User",
+                "Customer",
+                "Total",
+                "Paid",
+                "Due",
+                "Discount",
+                "COGS",
+                "Profit",
+                "Cash Profit",
+                "Realized",
+                "Provisional",
+            ]
         )
         configure_table(self.table, stretch_last=False)
         self.table.verticalHeader().setDefaultSectionSize(36)
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)
-        hdr.setSectionResizeMode(1, QtWidgets.QHeaderView.Fixed)
-        hdr.setSectionResizeMode(2, QtWidgets.QHeaderView.Fixed)
-        hdr.setSectionResizeMode(3, QtWidgets.QHeaderView.ResizeToContents)
-        hdr.setSectionResizeMode(4, QtWidgets.QHeaderView.Stretch)
-        for col in (5, 6, 7, 8):
+        hdr.setSectionResizeMode(1, QtWidgets.QHeaderView.Fixed)          # Date
+        hdr.setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeToContents)  # User
+        hdr.setSectionResizeMode(3, QtWidgets.QHeaderView.Stretch)        # Customer
+        for col in (4, 5, 6, 7, 8, 9, 10, 11, 12):
             hdr.setSectionResizeMode(col, QtWidgets.QHeaderView.Fixed)
         self.table.setColumnWidth(1, 118)
-        self.table.setColumnWidth(2, 92)
+        self.table.setColumnWidth(4, 108)
         self.table.setColumnWidth(5, 108)
         self.table.setColumnWidth(6, 108)
         self.table.setColumnWidth(7, 108)
         self.table.setColumnWidth(8, 108)
+        self.table.setColumnWidth(9, 108)
+        self.table.setColumnWidth(10, 108)
+        self.table.setColumnWidth(11, 108)
+        self.table.setColumnWidth(12, 108)
         layout.addWidget(self.table)
 
         pager = QtWidgets.QHBoxLayout()
@@ -101,11 +116,9 @@ class TransactionsView(QtWidgets.QWidget):
         self.end.dateChanged.connect(self._on_filter_changed)
         self.user_filter.currentIndexChanged.connect(self._on_filter_changed)
         self.btn_reset.clicked.connect(self._reset_filters)
-        self.btn_payments.clicked.connect(self.show_payments)
         self.btn_delete.clicked.connect(self.delete_selected)
         self.btn_prev.clicked.connect(self._prev_page)
         self.btn_next.clicked.connect(self._next_page)
-        self.btn_payments.setVisible(True)
         self._page = 1
         self._pages = 1
         polish_controls(self)
@@ -327,7 +340,12 @@ class TransactionsView(QtWidgets.QWidget):
             total = float(t.get("total", 0.0) or 0.0)
             paid = float(t.get("paid", 0.0) or 0.0)
             due = max(0.0, total - paid)
-            date_txt, time_txt = self._split_datetime(t.get("date", ""))
+            cogs = float(t.get("cogs", 0.0) or 0.0)
+            profit = float(t.get("profit", 0.0) or 0.0)
+            cash_profit = profit * (paid / total) if total > 1e-9 else 0.0
+            realized = float(t.get("realized", 0.0) or 0.0)
+            provisional = float(t.get("provisional", 0.0) or 0.0)
+            date_txt, _ = self._split_datetime(t.get("date", ""))
             user_txt = self._user_display_name(
                 t.get("user_id", 0),
                 fallback=str(
@@ -344,31 +362,43 @@ class TransactionsView(QtWidgets.QWidget):
 
             invoice_item = QtWidgets.QTableWidgetItem(str(t.get("id", 0)))
             date_item = QtWidgets.QTableWidgetItem(date_txt)
-            time_item = QtWidgets.QTableWidgetItem(time_txt)
             user_item = QtWidgets.QTableWidgetItem(user_txt)
             customer_item = QtWidgets.QTableWidgetItem(customer_txt)
             total_item = QtWidgets.QTableWidgetItem(f"{total:.2f}")
             paid_item = QtWidgets.QTableWidgetItem(f"{paid:.2f}")
             due_item = QtWidgets.QTableWidgetItem(f"{due:.2f}")
             discount_item = QtWidgets.QTableWidgetItem(f"{float(t.get('discount', 0.0)):.2f}")
+            cogs_item = QtWidgets.QTableWidgetItem(f"{cogs:.2f}")
+            profit_item = QtWidgets.QTableWidgetItem(f"{profit:.2f}")
+            cash_profit_item = QtWidgets.QTableWidgetItem(f"{cash_profit:.2f}")
+            realized_item = QtWidgets.QTableWidgetItem(f"{realized:.2f}")
+            provisional_item = QtWidgets.QTableWidgetItem(f"{provisional:.2f}")
 
             date_item.setTextAlignment(QtCore.Qt.AlignCenter)
-            time_item.setTextAlignment(QtCore.Qt.AlignCenter)
             user_item.setTextAlignment(QtCore.Qt.AlignCenter)
             total_item.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
             paid_item.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
             due_item.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
             discount_item.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
+            cogs_item.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
+            profit_item.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
+            cash_profit_item.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
+            realized_item.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
+            provisional_item.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
 
             self.table.setItem(r, 0, invoice_item)
             self.table.setItem(r, 1, date_item)
-            self.table.setItem(r, 2, time_item)
-            self.table.setItem(r, 3, user_item)
-            self.table.setItem(r, 4, customer_item)
-            self.table.setItem(r, 5, total_item)
-            self.table.setItem(r, 6, paid_item)
-            self.table.setItem(r, 7, due_item)
-            self.table.setItem(r, 8, discount_item)
+            self.table.setItem(r, 2, user_item)
+            self.table.setItem(r, 3, customer_item)
+            self.table.setItem(r, 4, total_item)
+            self.table.setItem(r, 5, paid_item)
+            self.table.setItem(r, 6, due_item)
+            self.table.setItem(r, 7, discount_item)
+            self.table.setItem(r, 8, cogs_item)
+            self.table.setItem(r, 9, profit_item)
+            self.table.setItem(r, 10, cash_profit_item)
+            self.table.setItem(r, 11, realized_item)
+            self.table.setItem(r, 12, provisional_item)
         self.page_label.setText(f"Page {self._page} / {self._pages}")
         self.btn_prev.setEnabled(self._page > 1)
         self.btn_next.setEnabled(self._page < self._pages)
@@ -404,242 +434,3 @@ class TransactionsView(QtWidgets.QWidget):
             self.refresh()
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Error", str(e))
-
-    def show_payments(self):
-        r = self.table.currentRow()
-        if r < 0:
-            QtWidgets.QMessageBox.information(self, "Select", "Select an invoice row first")
-            return
-        tid_item = self.table.item(r, 0)
-        if not tid_item:
-            QtWidgets.QMessageBox.information(self, "Select", "Invalid invoice row")
-            return
-        try:
-            tid = int(tid_item.text() or 0)
-        except Exception:
-            tid = 0
-        if tid <= 0:
-            QtWidgets.QMessageBox.information(self, "Select", "Invalid invoice number")
-            return
-
-        screen = QtWidgets.QApplication.primaryScreen()
-        if screen:
-            geo = screen.availableGeometry()
-            max_dlg_w = int(geo.width() * 0.92)
-            max_dlg_h = int(geo.height() * 0.90)
-        else:
-            max_dlg_w = 980
-            max_dlg_h = 760
-        row_h = 32
-        chrome_h = 196
-        col_widths = {
-            0: 118,  # Date
-            1: 92,   # Time
-            2: 112,  # Amount
-            3: 112,  # Paid Total
-            4: 170,  # User
-        }
-
-        dlg = QtWidgets.QDialog(self)
-        dlg.setWindowTitle(f"Payments for Invoice #{tid}")
-        v = QtWidgets.QVBoxLayout(dlg)
-        v.setContentsMargins(10, 10, 10, 10)
-        v.setSpacing(8)
-        table = QtWidgets.QTableWidget(0, 6)
-        table.setHorizontalHeaderLabels(["Date", "Time", "Amount", "Paid Total", "User", "Payment ID"])
-        table.setColumnHidden(5, True)
-        configure_table(table, stretch_last=False)
-        table.verticalHeader().setDefaultSectionSize(row_h)
-        table.setWordWrap(False)
-        table.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
-        table.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
-        hdr = table.horizontalHeader()
-        for col, width in col_widths.items():
-            hdr.setSectionResizeMode(col, QtWidgets.QHeaderView.Fixed)
-            table.setColumnWidth(col, width)
-        v.addWidget(table)
-        info = QtWidgets.QLabel("Edit a payment amount to correct payment history.")
-        info.setObjectName("mutedLabel")
-        v.addWidget(info)
-        overflow_lbl = QtWidgets.QLabel("")
-        overflow_lbl.setObjectName("mutedLabel")
-        overflow_lbl.setVisible(False)
-        v.addWidget(overflow_lbl)
-        state = {"total_rows": 0}
-
-        def _fit_dialog():
-            table_frame = table.frameWidth() * 2 + 2
-            table_w = sum(col_widths.values()) + table_frame
-            table_h = table.frameWidth() * 2 + table.horizontalHeader().height() + (table.rowCount() * row_h) + 2
-            table.setFixedSize(table_w, table_h)
-            dlg.adjustSize()
-            dlg.setFixedSize(min(max_dlg_w, dlg.sizeHint().width()), min(max_dlg_h, dlg.sizeHint().height()))
-
-        def _load_rows():
-            try:
-                rows = self.api.transaction_payments(tid) or []
-            except Exception as e:
-                QtWidgets.QMessageBox.critical(self, "Error", str(e))
-                return False
-            if isinstance(rows, dict):
-                QtWidgets.QMessageBox.information(self, "Payments", str(rows.get("detail", "Could not load payments")))
-                return False
-            rows = list(rows or [])
-            rows.sort(key=lambda row: str(row.get("date", "") or ""), reverse=True)
-            state["total_rows"] = len(rows)
-            self._load_name_lookups()
-            table.setRowCount(0)
-            if not rows:
-                overflow_lbl.setVisible(False)
-                _fit_dialog()
-                return True
-
-            header_h = max(30, table.horizontalHeader().height())
-            max_rows_fit = max(1, int((max_dlg_h - chrome_h - header_h) / max(1, row_h)))
-            visible_rows = rows[:max_rows_fit]
-            hidden_count = max(0, len(rows) - len(visible_rows))
-            for row in visible_rows:
-                rr = table.rowCount()
-                table.insertRow(rr)
-                dt = str(row.get("date", "") or "").strip()
-                date_txt, time_txt = "", ""
-                if dt:
-                    try:
-                        parsed = datetime.fromisoformat(dt.replace("Z", "+00:00"))
-                        date_txt = parsed.strftime("%d-%m-%Y")
-                        time_txt = parsed.strftime("%H:%M:%S")
-                    except Exception:
-                        normalized = dt.replace("T", " ")
-                        parts = normalized.split()
-                        date_txt = parts[0] if parts else normalized
-                        try:
-                            date_txt = datetime.strptime(date_txt, "%Y-%m-%d").strftime("%d-%m-%Y")
-                        except Exception:
-                            pass
-                        if len(parts) > 1:
-                            time_txt = parts[1]
-                            if "." in time_txt:
-                                time_txt = time_txt.split(".", 1)[0]
-                            if len(time_txt) > 8 and time_txt[8] in ("+", "-"):
-                                time_txt = time_txt[:8]
-                try:
-                    amt_f = float(row.get("amount", 0.0) or 0.0)
-                except Exception:
-                    amt_f = 0.0
-                amt = f"+{amt_f:.2f}" if amt_f >= 0 else f"{amt_f:.2f}"
-                try:
-                    paid_total = float(row.get("paid_total", 0.0) or 0.0)
-                except Exception:
-                    paid_total = 0.0
-                uid = int(row.get("user_id", 0) or 0)
-                user_txt = self._user_display_name(
-                    uid,
-                    fallback=str(
-                        row.get("user_name", "")
-                        or row.get("username", "")
-                        or row.get("user_fullname", "")
-                        or row.get("fullname", "")
-                    ),
-                )
-                pid = int(row.get("id", 0) or 0)
-                date_item = QtWidgets.QTableWidgetItem(date_txt)
-                time_item = QtWidgets.QTableWidgetItem(time_txt)
-                amount_item = QtWidgets.QTableWidgetItem(amt)
-                paid_total_item = QtWidgets.QTableWidgetItem(f"{paid_total:.2f}")
-                user_item = QtWidgets.QTableWidgetItem(user_txt)
-                date_item.setTextAlignment(QtCore.Qt.AlignCenter)
-                time_item.setTextAlignment(QtCore.Qt.AlignCenter)
-                amount_item.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
-                paid_total_item.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
-                table.setItem(rr, 0, date_item)
-                table.setItem(rr, 1, time_item)
-                table.setItem(rr, 2, amount_item)
-                table.setItem(rr, 3, paid_total_item)
-                table.setItem(rr, 4, user_item)
-                table.setItem(rr, 5, QtWidgets.QTableWidgetItem(str(pid)))
-            if hidden_count > 0:
-                overflow_lbl.setText(
-                    f"Showing latest {len(visible_rows)} of {len(rows)} payments to fit screen without scrolling."
-                )
-                overflow_lbl.setVisible(True)
-            else:
-                overflow_lbl.setVisible(False)
-            _fit_dialog()
-            return True
-
-        def _edit_selected():
-            rr = table.currentRow()
-            if rr < 0:
-                QtWidgets.QMessageBox.information(self, "Payments", "Select a payment row first.")
-                return
-            if not self._can_delete_payment:
-                QtWidgets.QMessageBox.information(
-                    self,
-                    "Permission",
-                    "You do not have permission to modify payments.",
-                )
-                return
-            id_item = table.item(rr, 5)
-            amt_item = table.item(rr, 2)
-            if not id_item or not amt_item:
-                QtWidgets.QMessageBox.information(self, "Payments", "Invalid payment row.")
-                return
-            try:
-                payment_id = int(id_item.text() or 0)
-            except Exception:
-                payment_id = 0
-            if payment_id <= 0:
-                QtWidgets.QMessageBox.information(self, "Payments", "Invalid payment ID.")
-                return
-            try:
-                current_amount = float((amt_item.text() or "0").replace("+", ""))
-            except Exception:
-                current_amount = 0.0
-            new_amount, ok = QtWidgets.QInputDialog.getDouble(
-                dlg,
-                "Edit Payment",
-                "Payment amount:",
-                value=current_amount,
-                min=0.0,
-                max=10**12,
-                decimals=2,
-            ) 
-            if not ok:
-                return
-            try:
-                resp = self.api.transaction_payment_update(
-                    tid,
-                    payment_id,
-                    float(new_amount),
-                    user_id=int(self._user_id or 0),
-                )
-            except Exception as e:
-                QtWidgets.QMessageBox.critical(self, "Error", str(e))
-                return
-            if isinstance(resp, dict) and resp.get("detail") and not resp.get("id"):
-                QtWidgets.QMessageBox.information(self, "Payments", str(resp.get("detail")))
-                return
-            _load_rows()
-            self.refresh()
-
-        if not _load_rows():
-            return
-        if table.rowCount() <= 0:
-            QtWidgets.QMessageBox.information(self, "Payments", f"No payment entries for invoice #{tid}.")
-            return
-        edit_btn = QtWidgets.QPushButton("Edit Selected")
-        edit_btn.clicked.connect(_edit_selected)
-        if not self._can_delete_payment:
-            edit_btn.setEnabled(False)
-            edit_btn.setToolTip("You do not have permission to modify payments.")
-        close_btn = QtWidgets.QPushButton("Close")
-        close_btn.clicked.connect(dlg.accept)
-        set_secondary(edit_btn, close_btn)
-        row_btn = QtWidgets.QHBoxLayout()
-        row_btn.addWidget(edit_btn)
-        row_btn.addStretch(1)
-        row_btn.addWidget(close_btn)
-        v.addLayout(row_btn)
-        polish_controls(dlg)
-        _fit_dialog()
-        dlg.exec_()

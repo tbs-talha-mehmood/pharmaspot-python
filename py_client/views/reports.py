@@ -65,7 +65,7 @@ class ReportsView(QtWidgets.QWidget):
         paid_card, self.paid_label = self._metric_card("Cash Received", "0.00")
         due_card, self.due_label = self._metric_card("Due", "0.00")
         profit_card, self.profit_label = self._metric_card("Profit (Accrual)", "0.00")
-        realized_card, self.realized_profit_label = self._metric_card("Profit (Realized)", "0.00")
+        realized_card, self.realized_profit_label = self._metric_card("Profit (Cash)", "0.00")
         metrics.addWidget(tx_card)
         metrics.addWidget(gross_card)
         metrics.addWidget(paid_card)
@@ -80,7 +80,7 @@ class ReportsView(QtWidgets.QWidget):
 
         self.table = QtWidgets.QTableWidget(0, 9)
         self.table.setHorizontalHeaderLabels(
-            ["Date", "Invoices", "Sales", "Received", "Due", "COGS", "Profit", "Realized", "Provisional"]
+            ["Date", "Invoices", "Sales", "Received", "Due", "COGS", "Profit", "Cash Profit", "Provisional"]
         )
         configure_table(self.table, stretch_last=False)
         self.table.verticalHeader().setDefaultSectionSize(36)

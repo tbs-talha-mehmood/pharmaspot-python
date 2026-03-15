@@ -252,7 +252,14 @@ class BarChartWidget(QtWidgets.QWidget):
             qty_w = max(int(bar_w) + 30, fm.horizontalAdvance(qty_txt) + 12)
             qty_x = int(chart.left() + i * slot_w + (slot_w - qty_w) / 2.0)
             qty_h = fm.height() + 6
-            qty_y = max(chart.top() + 10, y - qty_h - 6)
+            # Prefer drawing just above the bar; if that would clip
+            # against the top of the chart, draw slightly inside the bar
+            # instead so large values remain fully visible.
+            preferred_top = y - qty_h - 6
+            if preferred_top >= chart.top() + 4:
+                qty_y = preferred_top
+            else:
+                qty_y = min(chart.bottom() - qty_h - 4, y + 4)
             painter.drawText(qty_x, qty_y, qty_w, qty_h, QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter, qty_txt)
 
     def _short(self, text: str, max_len: int) -> str:
@@ -303,6 +310,7 @@ class DashboardView(QtWidgets.QWidget):
         cash_card, self.cash_lbl = self._metric_card("Cash Received", "0.00")
         due_card, self.due_lbl = self._metric_card("Due", "0.00")
         profit_card, self.profit_lbl = self._metric_card("Profit (Accrual)", "0.00")
+        realized_card, self.realized_profit_lbl = self._metric_card("Profit (Cash)", "0.00")
         purchases_card, self.purchases_lbl = self._metric_card("Purchases", "0.00")
         supplier_due_card, self.supplier_due_lbl = self._metric_card("Supplier Due", "0.00")
         tx_card, self.tx_lbl = self._metric_card("Transactions", "0")
@@ -311,6 +319,7 @@ class DashboardView(QtWidgets.QWidget):
         metrics.addWidget(cash_card)
         metrics.addWidget(due_card)
         metrics.addWidget(profit_card)
+        metrics.addWidget(realized_card)
         metrics.addWidget(purchases_card)
         metrics.addWidget(supplier_due_card)
         metrics.addWidget(tx_card)
@@ -505,6 +514,7 @@ class DashboardView(QtWidgets.QWidget):
                 "id": tid,
                 "ts": ts,
                 "day": ts.date() if ts else None,
+                "gross_total": total_gross,
                 "revenue": max(0.0, float(revenue_net)),
                 "due": due,
                 "cost": 0.0,
@@ -677,6 +687,7 @@ class DashboardView(QtWidgets.QWidget):
         sales_total = 0.0
         due_total = 0.0
         profit_total = 0.0
+        realized_profit_total = 0.0
         purchases_total = 0.0
         supplier_due_total = 0.0
         cash_total = 0.0
@@ -685,6 +696,7 @@ class DashboardView(QtWidgets.QWidget):
         sales_by_day = defaultdict(float)
         due_by_day = defaultdict(float)
         profit_by_day = defaultdict(float)
+        realized_profit_by_day = defaultdict(float)
         purchases_by_day = defaultdict(float)
         cash_by_day = defaultdict(float)
         sold_qty_by_product = defaultdict(float)
@@ -761,6 +773,17 @@ class DashboardView(QtWidgets.QWidget):
             amount = self._to_float(pay.get("amount", 0.0), 0.0)
             cash_total += amount
             cash_by_day[day] += amount
+
+            tx_id = self._to_int(pay.get("transaction_id", 0), 0)
+            inv = invoice_map.get(tx_id)
+            if inv:
+                inv_gross = max(0.0, self._to_float(inv.get("gross_total", 0.0), 0.0))
+                inv_profit = self._to_float(inv.get("profit", 0.0), 0.0)
+                realized_piece = (inv_profit * (amount / inv_gross)) if inv_gross > 1e-9 else 0.0
+            else:
+                realized_piece = 0.0
+            realized_profit_total += realized_piece
+            realized_profit_by_day[day] += realized_piece
 
         days = []
         cur = start_dt
@@ -853,6 +876,7 @@ class DashboardView(QtWidgets.QWidget):
         self.cash_lbl.setText(f"{cash_total:.2f}")
         self.due_lbl.setText(f"{due_total:.2f}")
         self.profit_lbl.setText(f"{profit_total:.2f}")
+        self.realized_profit_lbl.setText(f"{realized_profit_total:.2f}")
         self.purchases_lbl.setText(f"{purchases_total:.2f}")
         self.supplier_due_lbl.setText(f"{supplier_due_total:.2f}")
         self.tx_lbl.setText(str(int(tx_count)))
