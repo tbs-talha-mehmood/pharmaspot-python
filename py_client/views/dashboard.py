@@ -335,7 +335,7 @@ class DashboardView(QtWidgets.QWidget):
         self.trend_chart = TrendChartWidget()
         trend_v.addWidget(self.trend_chart)
 
-        top_box = QtWidgets.QGroupBox("Top Selling Products (Qty)")
+        top_box = QtWidgets.QGroupBox("Expired Products")
         top_box.setObjectName("totalsCard")
         top_v = QtWidgets.QVBoxLayout(top_box)
         top_v.setContentsMargins(10, 10, 10, 10)
@@ -802,10 +802,31 @@ class DashboardView(QtWidgets.QWidget):
             },
         )
 
-        top_items = sorted(sold_qty_by_product.items(), key=lambda x: float(x[1]), reverse=True)[:8]
-        top_labels = [product_name_by_id.get(pid, f"ID {pid}") for pid, _ in top_items]
-        top_vals = [float(qty) for _, qty in top_items]
-        self.top_chart.set_data(top_labels, top_vals)
+        # Expired products chart: show products with an expiry date on or before today,
+        # using their current stock quantity as the bar value.
+        today = datetime.now().date()
+        expired_rows = []
+        for p in products or []:
+            raw_exp = str(p.get("expirationDate", "") or "").strip()
+            if not raw_exp:
+                continue
+            # Expect YYYY-MM-DD but ignore invalid formats gracefully.
+            try:
+                exp_date = datetime.strptime(raw_exp.split()[0], "%Y-%m-%d").date()
+            except Exception:
+                continue
+            if exp_date > today:
+                continue
+            qty = self._to_int(p.get("quantity", 0), 0)
+            if qty <= 0:
+                continue
+            name = str(p.get("name", "") or "")
+            expired_rows.append((exp_date, name, qty))
+
+        expired_rows.sort(key=lambda x: (x[0], -x[2], x[1].lower()))
+        exp_labels = [f"{name} ({exp.strftime('%d-%m')})" for exp, name, _qty in expired_rows[:8]]
+        exp_vals = [float(qty) for _exp, _name, qty in expired_rows[:8]]
+        self.top_chart.set_data(exp_labels, exp_vals)
 
         low_rows = []
         for p in products or []:

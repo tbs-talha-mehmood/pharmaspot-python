@@ -48,8 +48,8 @@ class ProductsView(QtWidgets.QWidget):
         header.addWidget(self.search)
         layout.addLayout(header)
 
-        self.table = QtWidgets.QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["ID", "Name", "Qty", "Price", "Company"])
+        self.table = QtWidgets.QTableWidget(0, 6)
+        self.table.setHorizontalHeaderLabels(["ID", "Name", "Qty", "Price", "Company", "Expiry"])
         configure_table(self.table, stretch_last=False)
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)
@@ -57,6 +57,7 @@ class ProductsView(QtWidgets.QWidget):
         hdr.setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeToContents)
         hdr.setSectionResizeMode(3, QtWidgets.QHeaderView.ResizeToContents)
         hdr.setSectionResizeMode(4, QtWidgets.QHeaderView.Stretch)
+        hdr.setSectionResizeMode(5, QtWidgets.QHeaderView.ResizeToContents)
         layout.addWidget(self.table)
 
         pager = QtWidgets.QHBoxLayout()
@@ -160,6 +161,7 @@ class ProductsView(QtWidgets.QWidget):
             self.table.setItem(r, 2, QtWidgets.QTableWidgetItem(str(p.get("quantity", 0))))
             self.table.setItem(r, 3, QtWidgets.QTableWidgetItem(f"{float(p.get('price', 0.0) or 0.0):.2f}"))
             self.table.setItem(r, 4, QtWidgets.QTableWidgetItem(p.get("company_name", "")))
+            self.table.setItem(r, 5, QtWidgets.QTableWidgetItem(str(p.get("expirationDate", "") or "")))
         self.page_label.setText(f"Page {self._page} / {self._pages}")
         self.btn_prev.setEnabled(self._page > 1)
         self.btn_next.setEnabled(self._page < self._pages)
@@ -197,6 +199,8 @@ class ProductsView(QtWidgets.QWidget):
         price = QtWidgets.QDoubleSpinBox()
         price.setMaximum(10**9)
         price.setDecimals(2)
+        expiry = QtWidgets.QLineEdit()
+        expiry.setPlaceholderText("YYYY-MM-DD (optional)")
         company = QtWidgets.QComboBox()
         company.setEditable(True)
         try:
@@ -209,6 +213,7 @@ class ProductsView(QtWidgets.QWidget):
         if existing:
             name.setText(existing.get("name", ""))
             price.setValue(float(existing.get("price", 0.0) or 0.0))
+            expiry.setText(str(existing.get("expirationDate", "") or ""))
             cid = int(existing.get("company_id") or 0)
             if cid:
                 idx = company.findData(cid)
@@ -218,6 +223,7 @@ class ProductsView(QtWidgets.QWidget):
                 company.setCurrentText(existing.get("company_name"))
         form.addRow("Name", name)
         form.addRow("Price", price)
+        form.addRow("Expiry", expiry)
         form.addRow("Company", company)
         btns = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
         form.addRow(btns)
@@ -225,7 +231,7 @@ class ProductsView(QtWidgets.QWidget):
         btns.rejected.connect(d.reject)
         polish_controls(d)
         fit_dialog_to_contents(d, min_width=440, fixed=True)
-        return d, name, price, company
+        return d, name, price, company, expiry
 
     def _selected_product(self):
         r = self.table.currentRow()
@@ -244,10 +250,10 @@ class ProductsView(QtWidgets.QWidget):
             return None
 
     def add_product_dialog(self):
-        d, name, price, company = self._product_dialog("Add Product")
+        d, name, price, company, expiry = self._product_dialog("Add Product")
         while d.exec_() == QtWidgets.QDialog.Accepted:
             try:
-                payload = self._payload_from_form(name, price, company)
+                payload = self._payload_from_form(name, price, company, expiry)
                 resp = self.api.product_upsert(payload)
                 if isinstance(resp, dict) and resp.get("detail") and not resp.get("id"):
                     raise Exception(str(resp.get("detail")))
@@ -261,10 +267,10 @@ class ProductsView(QtWidgets.QWidget):
         if not existing:
             QtWidgets.QMessageBox.information(self, "Select", "Select a product row first")
             return
-        d, name, price, company = self._product_dialog("Edit Product", existing)
+        d, name, price, company, expiry = self._product_dialog("Edit Product", existing)
         while d.exec_() == QtWidgets.QDialog.Accepted:
             try:
-                payload = self._payload_from_form(name, price, company)
+                payload = self._payload_from_form(name, price, company, expiry)
                 payload["id"] = int(existing.get("id"))
                 resp = self.api.product_upsert(payload)
                 if isinstance(resp, dict) and resp.get("detail") and not resp.get("id"):
@@ -309,7 +315,7 @@ class ProductsView(QtWidgets.QWidget):
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Error", str(e))
 
-    def _payload_from_form(self, name, price, company):
+    def _payload_from_form(self, name, price, company, expiry):
         try:
             company_id = int(company.currentData() or 0)
         except Exception:
@@ -338,6 +344,7 @@ class ProductsView(QtWidgets.QWidget):
             "name": name_val,
             "price": price.value(),
             "company_id": company_id,
+            "expirationDate": expiry.text().strip(),
         }
 
 

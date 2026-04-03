@@ -49,15 +49,22 @@ class CustomersView(QtWidgets.QWidget):
         header.addWidget(self.search)
         layout.addLayout(header)
 
-        self.table = QtWidgets.QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["ID", "Name", "Phone", "Email", "Address"])
+        # Main customers table now shows amount summary columns similar to suppliers.
+        self.table = QtWidgets.QTableWidget(0, 9)
+        self.table.setHorizontalHeaderLabels(
+            ["ID", "Name", "Phone", "Email", "Address", "Invoices", "Total", "Paid", "Due"]
+        )
         configure_table(self.table, stretch_last=False)
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)
         hdr.setSectionResizeMode(1, QtWidgets.QHeaderView.Stretch)
-        hdr.setSectionResizeMode(2, QtWidgets.QHeaderView.Stretch)
-        hdr.setSectionResizeMode(3, QtWidgets.QHeaderView.Stretch)
+        hdr.setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(3, QtWidgets.QHeaderView.ResizeToContents)
         hdr.setSectionResizeMode(4, QtWidgets.QHeaderView.Stretch)
+        hdr.setSectionResizeMode(5, QtWidgets.QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(6, QtWidgets.QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(7, QtWidgets.QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(8, QtWidgets.QHeaderView.ResizeToContents)
         layout.addWidget(self.table)
 
         pager = QtWidgets.QHBoxLayout()
@@ -150,11 +157,46 @@ class CustomersView(QtWidgets.QWidget):
         for p in items:
             r = self.table.rowCount()
             self.table.insertRow(r)
-            self.table.setItem(r, 0, QtWidgets.QTableWidgetItem(str(p.get("id"))))
-            self.table.setItem(r, 1, QtWidgets.QTableWidgetItem(p.get("name", "")))
-            self.table.setItem(r, 2, QtWidgets.QTableWidgetItem(p.get("phone", "")))
-            self.table.setItem(r, 3, QtWidgets.QTableWidgetItem(p.get("email", "")))
-            self.table.setItem(r, 4, QtWidgets.QTableWidgetItem(p.get("address", "")))
+            cid = int((p or {}).get("id", 0) or 0)
+            name = str(p.get("name", "") or "")
+            is_active = bool(p.get("is_active", True))
+            inv_count = int((p or {}).get("invoice_count", 0) or 0)
+            total_sales = float((p or {}).get("total_sales", 0.0) or 0.0)
+            total_paid = float((p or {}).get("total_paid", 0.0) or 0.0)
+            total_due = max(0.0, float((p or {}).get("total_due", 0.0) or 0.0))
+
+            id_item = QtWidgets.QTableWidgetItem(str(cid))
+            name_item = QtWidgets.QTableWidgetItem(name if is_active else f"{name} (Inactive)")
+            phone_item = QtWidgets.QTableWidgetItem(p.get("phone", ""))
+            email_item = QtWidgets.QTableWidgetItem(p.get("email", ""))
+            addr_item = QtWidgets.QTableWidgetItem(p.get("address", ""))
+
+            inv_item = QtWidgets.QTableWidgetItem(str(inv_count))
+            total_item = QtWidgets.QTableWidgetItem(f"{total_sales:.2f}")
+            paid_item = QtWidgets.QTableWidgetItem(f"{total_paid:.2f}")
+            due_item = QtWidgets.QTableWidgetItem(f"{total_due:.2f}")
+
+            inv_item.setTextAlignment(QtCore.Qt.AlignCenter)
+            total_item.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
+            paid_item.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
+            due_item.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
+            if total_due > 1e-9:
+                due_item.setForeground(QtGui.QBrush(QtGui.QColor("#F87171")))
+
+            if not is_active:
+                fade = QtGui.QBrush(QtGui.QColor("#7C8DA6"))
+                for itm in (id_item, name_item, phone_item, email_item, addr_item, inv_item, total_item, paid_item):
+                    itm.setForeground(fade)
+
+            self.table.setItem(r, 0, id_item)
+            self.table.setItem(r, 1, name_item)
+            self.table.setItem(r, 2, phone_item)
+            self.table.setItem(r, 3, email_item)
+            self.table.setItem(r, 4, addr_item)
+            self.table.setItem(r, 5, inv_item)
+            self.table.setItem(r, 6, total_item)
+            self.table.setItem(r, 7, paid_item)
+            self.table.setItem(r, 8, due_item)
         self.page_label.setText(f"Page {self._page} / {self._pages}")
         self.btn_prev.setEnabled(self._page > 1)
         self.btn_next.setEnabled(self._page < self._pages)

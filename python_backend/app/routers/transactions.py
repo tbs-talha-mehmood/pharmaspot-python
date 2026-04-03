@@ -127,17 +127,27 @@ def _apply_inventory(items: list[TransactionItem], db: Session, add_back: bool) 
 
 
 def _validate_payment_bounds(total: float, paid: float) -> tuple[float, float]:
+    """
+    Validate that paid does not materially exceed total.
+
+    Uses cent-level rounding and a small tolerance to avoid spurious
+    failures caused by floating point rounding (e.g. 999.999999 vs 1000.00).
+    """
     total_f = max(0.0, float(total or 0.0))
     paid_f = float(paid or 0.0)
-    if paid_f < 0:
+    total_q = round(total_f + 1e-9, 2)
+    paid_q = round(paid_f + 1e-9, 2)
+    if paid_q < 0:
         raise HTTPException(status_code=400, detail="Paid amount must be zero or positive")
-    if paid_f - total_f > 1e-6:
-        over = paid_f - total_f
+    if paid_q - total_q > 0.01:
+        over = paid_q - total_q
         raise HTTPException(
             status_code=400,
             detail=f"Paid amount exceeds invoice total by {over:.2f}. Reduce payment first.",
         )
-    return total_f, paid_f
+    if paid_q > total_q:
+        paid_q = total_q
+    return total_q, paid_q
 
 
 def _payment_to_dict(p: TransactionPayment) -> TransactionPaymentOut:
@@ -481,15 +491,18 @@ def apply_customer_payment(
 
     if not due_rows:
         raise HTTPException(status_code=400, detail="No due invoices found for this customer")
-    if amount - total_due_before > 1e-6:
+    # Compare and apply at cent precision to avoid float noise across many invoices.
+    amount_q = round(float(amount or 0.0) + 1e-9, 2)
+    total_due_q = round(float(total_due_before or 0.0) + 1e-9, 2)
+    if amount_q - total_due_q > 0.01:
         raise HTTPException(
             status_code=400,
-            detail=f"Amount exceeds merged due by {amount - total_due_before:.2f}",
+            detail=f"Amount exceeds merged due by {amount_q - total_due_q:.2f}",
         )
 
     payment_date = str(payload.date or "").strip() or datetime.utcnow().isoformat()
     ensure_not_locked_for_date(db, parse_date_like(payment_date), "Applying payment")
-    remaining = amount
+    remaining = min(amount_q, total_due_q)
     allocations: list[CustomerPaymentAllocationOut] = []
     for t, paid_before, due_before in due_rows:
         if remaining <= 1e-9:

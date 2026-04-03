@@ -5,7 +5,7 @@ from sqlalchemy import func, or_
 import math
 
 from ..database import get_db, Base, engine
-from ..models import Customer
+from ..models import Customer, Transaction
 from ..schemas import CustomerCreate, CustomerOut
 
 
@@ -126,7 +126,42 @@ def list_customers_page(
         )
     total = query.count()
     rows = query.offset((page - 1) * page_size).limit(page_size).all()
-    items = [CustomerOut.model_validate(c).model_dump() for c in rows]
+
+    # Compute per-customer invoice and amount statistics similar to suppliers.
+    customer_ids = [int(c.id or 0) for c in rows if int(c.id or 0) > 0]
+    stats: dict[int, dict] = {}
+    if customer_ids:
+        tx_rows = db.query(Transaction).filter(Transaction.customer_id.in_(customer_ids)).all()
+        for t in tx_rows:
+            cid = int(t.customer_id or 0)
+            if cid <= 0:
+                continue
+            slot = stats.setdefault(
+                cid,
+                {
+                    "invoice_count": 0,
+                    "total_sales": 0.0,
+                    "total_paid": 0.0,
+                    "total_due": 0.0,
+                },
+            )
+            total_amt = max(0.0, float(t.total or 0.0))
+            paid_amt = max(0.0, float(t.paid or 0.0))
+            due_amt = max(0.0, total_amt - paid_amt)
+            slot["invoice_count"] += 1
+            slot["total_sales"] += total_amt
+            slot["total_paid"] += paid_amt
+            slot["total_due"] += due_amt
+
+    items: List[Dict[str, Any]] = []
+    for c in rows:
+        out = CustomerOut.model_validate(c).model_dump()
+        st = stats.get(int(c.id or 0), {})
+        out["invoice_count"] = int(st.get("invoice_count", 0) or 0)
+        out["total_sales"] = float(st.get("total_sales", 0.0) or 0.0)
+        out["total_paid"] = float(st.get("total_paid", 0.0) or 0.0)
+        out["total_due"] = float(st.get("total_due", 0.0) or 0.0)
+        items.append(out)
     return {
         "items": items,
         "total": total,
