@@ -21,3 +21,6 @@ dist/
 # Logs and temp files
 *.log
 *.tmp
+
+# macOS build venv
+.venv-mac-build/

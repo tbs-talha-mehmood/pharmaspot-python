@@ -90,3 +90,36 @@ Keyboard shortcuts:
 .venv\Scripts\python.exe -m py_compile py_client/views/transactions.py
 .venv\Scripts\python.exe -m py_compile python_backend/app/routers/transactions.py
 ```
+## Build (macOS)
+
+To create a native macOS app bundle (.app) and DMG:
+
+1) On a Mac (macOS 12+), install Python 3.11 or 3.12.
+2) Clone this repo and run in Terminal:
+
+```bash
+chmod +x scripts/build_macos.sh
+./scripts/build_macos.sh
+```
+
+- Output app: `dist/PharmaSpot.app`
+- Optional DMG: `dist/PharmaSpot-macOS.dmg`
+
+Notes:
+- The build uses `PharmaSpot.macos.spec` which fixes path separators and sets the correct icon handling for macOS.
+- If `bcrypt` fails to install during the build on newer Python versions, install a newer wheel and retry:
+
+```bash
+source .venv-mac-build/bin/activate
+pip install 'bcrypt>=4.0.1,<5'
+```
+
+## Build (Windows)
+
+Windows builds continue to use `PharmaSpot.spec`, e.g.:
+
+```powershell
+.venv\\Scripts\\Activate.ps1
+pip install pyinstaller
+pyinstaller PharmaSpot.spec --noconfirm --clean --windowed
+```

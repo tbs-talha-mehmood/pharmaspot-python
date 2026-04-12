@@ -1,0 +1,57 @@
+﻿name: macOS Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      python-version:
+        description: 'Python version (e.g., 3.11)'
+        required: false
+        default: '3.11'
+  push:
+    branches: [ master ]
+    paths:
+      - 'py_client/**'
+      - 'python_backend/**'
+      - 'PharmaSpot*.spec'
+      - 'scripts/build_macos.sh'
+      - '.github/workflows/macos-build.yml'
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ github.event.inputs.python-version || '3.11' }}
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Make script executable
+        run: chmod +x scripts/build_macos.sh
+
+      - name: Build app (PyInstaller)
+        run: ./scripts/build_macos.sh
+
+      - name: Upload .app bundle
+        if: exists('dist/PharmaSpot.app')
+        uses: actions/upload-artifact@v4
+        with:
+          name: PharmaSpot-macOS-app
+          path: dist/PharmaSpot.app
+
+      - name: Upload DMG (if present)
+        if: exists('dist/PharmaSpot-macOS.dmg')
+        uses: actions/upload-artifact@v4
+        with:
+          name: PharmaSpot-macOS-dmg
+          path: dist/PharmaSpot-macOS.dmg
