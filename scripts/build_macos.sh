@@ -38,8 +38,7 @@ source "$VENV/bin/activate"
 
 python -m pip install --upgrade pip wheel setuptools
 # Install client + backend deps, then PyInstaller
-pip install -r py_client/requirements.txt -r python_backend/requirements.txt
-pip install pyinstaller
+pip install -r py_client/requirements.txt\n# Try backend deps; if bcrypt 3.2.2 fails to build on macOS, retry without it and install a newer wheel\nif ! pip install -r python_backend/requirements.txt; then\n  echo 'Falling back: installing backend deps without bcrypt, then bcrypt>=4'\n  grep -v '^bcrypt' python_backend/requirements.txt > /tmp/backend-reqs-no-bcrypt.txt\n  pip install -r /tmp/backend-reqs-no-bcrypt.txt\n  pip install 'bcrypt>=4.0.1,<5'\nfi\npip install pyinstaller
 
 # Clean previous builds
 rm -rf build dist
@@ -62,3 +61,4 @@ else
   echo "Build finished but .app not found; check PyInstaller logs." >&2
   exit 2
 fi
+
