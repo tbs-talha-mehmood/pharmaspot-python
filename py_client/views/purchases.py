@@ -100,6 +100,8 @@ class PurchasesView(QtWidgets.QWidget):
             ["Product", "Retail", "% Discount", "Trade", "Addl %", "Qty", "Line Total"]
         )
         configure_table(self.items_table, stretch_last=False)
+        # Allow editing of Trade column while keeping other cells controlled by flags/widgets.
+        self.items_table.setEditTriggers(QtWidgets.QAbstractItemView.AllEditTriggers)
         self.items_table.verticalHeader().setDefaultSectionSize(40)
         header = self.items_table.horizontalHeader()
         header.setSectionResizeMode(0, QtWidgets.QHeaderView.Stretch)
@@ -161,6 +163,8 @@ class PurchasesView(QtWidgets.QWidget):
         self.btn_save.clicked.connect(self._save_purchase)
         self.btn_cancel_edit.clicked.connect(self._cancel_edit)
         self.paid_input.valueChanged.connect(self._recalc_total)
+        # Allow updating discount % when trade price is typed manually.
+        self.items_table.itemChanged.connect(self._on_item_changed)
         polish_controls(parent)
         # Keyboard shortcuts similar to POS
         QtWidgets.QShortcut(QtGui.QKeySequence("F2"), self, activated=self._focus_search)
@@ -491,7 +495,6 @@ class PurchasesView(QtWidgets.QWidget):
         extra_spin = self._make_pct_spin(extra_pct)
         qty_spin = self._make_qty_spin(qty)
         trade_item = QtWidgets.QTableWidgetItem(f"{float(trade_price or retail_price):.2f}")
-        trade_item.setFlags(trade_item.flags() & ~QtCore.Qt.ItemIsEditable)
         trade_item.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
         self.items_table.setCellWidget(r, 2, pct_spin)
         self.items_table.setItem(r, 3, trade_item)
@@ -516,6 +519,33 @@ class PurchasesView(QtWidgets.QWidget):
         self._recalc_total()
         self._focus_items_cell(r, 2)
         return r
+
+    def _on_item_changed(self, item: QtWidgets.QTableWidgetItem):
+        """When user edits Trade column manually, auto-derive Discount %."""
+        if self._suppress_item_change:
+            return
+        if item is None or item.column() != 3:
+            return
+        row = item.row()
+        try:
+            retail_w = self.items_table.cellWidget(row, 1)
+            pct_w = self.items_table.cellWidget(row, 2)
+            if retail_w is None or pct_w is None:
+                return
+            retail = float(retail_w.value())
+            trade_txt = item.text() or "0"
+            trade = float(trade_txt)
+            if retail <= 0:
+                return
+            pct = max(0.0, min(100.0, (1.0 - (trade / retail)) * 100.0))
+            self._suppress_item_change = True
+            pct_w.setValue(pct)
+            self._suppress_item_change = False
+            self._recalc_row(row)
+            self._recalc_total()
+        except Exception:
+            # If parsing fails, leave row as-is.
+            pass
 
     def _on_widget_changed(self, widget):
         row = self._find_row_for_widget(widget)

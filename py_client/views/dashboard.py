@@ -339,8 +339,15 @@ class DashboardView(QtWidgets.QWidget):
         top_box.setObjectName("totalsCard")
         top_v = QtWidgets.QVBoxLayout(top_box)
         top_v.setContentsMargins(10, 10, 10, 10)
-        self.top_chart = BarChartWidget()
-        top_v.addWidget(self.top_chart)
+        self.expired_table = QtWidgets.QTableWidget(0, 4)
+        self.expired_table.setHorizontalHeaderLabels(["Product", "Qty", "Company", "Expiry"])
+        configure_table(self.expired_table, stretch_last=False)
+        exp_hdr = self.expired_table.horizontalHeader()
+        exp_hdr.setSectionResizeMode(0, QtWidgets.QHeaderView.Stretch)
+        exp_hdr.setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeToContents)
+        exp_hdr.setSectionResizeMode(2, QtWidgets.QHeaderView.Stretch)
+        exp_hdr.setSectionResizeMode(3, QtWidgets.QHeaderView.ResizeToContents)
+        top_v.addWidget(self.expired_table)
 
         charts.addWidget(trend_box, 2)
         charts.addWidget(top_box, 1)
@@ -438,6 +445,35 @@ class DashboardView(QtWidgets.QWidget):
             return datetime.strptime(txt, "%Y-%m-%d")
         except Exception:
             return None
+
+    def _parse_expiry_date(self, raw_value):
+        """
+        Parse a product expiry date string into a date.
+
+        Accepts common formats like YYYY-MM-DD and DD-MM-YYYY; ignores
+        invalid or empty values gracefully.
+        """
+        txt = str(raw_value or "").strip()
+        if not txt:
+            return None
+        # Normalize simple separators and strip any time part.
+        part = txt.split()[0].replace("/", "-")
+        # Try a range of common formats:
+        # - 2025-12-01
+        # - 01-12-2025
+        # - 01-Dec-2025, 01-December-2025
+        for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d-%b-%Y", "%d-%B-%Y", "%d-%b-%y"):
+            try:
+                return datetime.strptime(part, fmt).date()
+            except Exception:
+                continue
+        dt = self._parse_datetime(txt)
+        if dt is not None:
+            try:
+                return dt.date()
+            except Exception:
+                return None
+        return None
 
     def _sale_unit_price(self, item: dict) -> float:
         unit = item.get("unit_price")
@@ -802,18 +838,12 @@ class DashboardView(QtWidgets.QWidget):
             },
         )
 
-        # Expired products chart: show products with an expiry date on or before today,
-        # using their current stock quantity as the bar value.
+        # Expired products table: list products with an expiry date on or before today.
         today = datetime.now().date()
         expired_rows = []
         for p in products or []:
-            raw_exp = str(p.get("expirationDate", "") or "").strip()
-            if not raw_exp:
-                continue
-            # Expect YYYY-MM-DD but ignore invalid formats gracefully.
-            try:
-                exp_date = datetime.strptime(raw_exp.split()[0], "%Y-%m-%d").date()
-            except Exception:
+            exp_date = self._parse_expiry_date(p.get("expirationDate", ""))
+            if exp_date is None:
                 continue
             if exp_date > today:
                 continue
@@ -821,12 +851,23 @@ class DashboardView(QtWidgets.QWidget):
             if qty <= 0:
                 continue
             name = str(p.get("name", "") or "")
-            expired_rows.append((exp_date, name, qty))
+            company = str(p.get("company_name", "") or "")
+            expired_rows.append((exp_date, name, qty, company))
 
+        # Sort by soonest expiry, then highest qty, then name.
         expired_rows.sort(key=lambda x: (x[0], -x[2], x[1].lower()))
-        exp_labels = [f"{name} ({exp.strftime('%d-%m')})" for exp, name, _qty in expired_rows[:8]]
-        exp_vals = [float(qty) for _exp, _name, qty in expired_rows[:8]]
-        self.top_chart.set_data(exp_labels, exp_vals)
+        self.expired_table.setRowCount(0)
+        for exp_date, name, qty, company in expired_rows[:50]:
+            r = self.expired_table.rowCount()
+            self.expired_table.insertRow(r)
+            self.expired_table.setItem(r, 0, QtWidgets.QTableWidgetItem(name))
+            qty_item = QtWidgets.QTableWidgetItem(str(int(qty)))
+            qty_item.setTextAlignment(QtCore.Qt.AlignCenter)
+            self.expired_table.setItem(r, 1, qty_item)
+            self.expired_table.setItem(r, 2, QtWidgets.QTableWidgetItem(company))
+            exp_item = QtWidgets.QTableWidgetItem(exp_date.strftime("%d-%b-%Y"))
+            exp_item.setTextAlignment(QtCore.Qt.AlignCenter)
+            self.expired_table.setItem(r, 3, exp_item)
 
         low_rows = []
         for p in products or []:

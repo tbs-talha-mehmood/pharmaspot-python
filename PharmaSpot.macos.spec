@@ -73,3 +73,13 @@ exe = EXE(
     entitlements_file=None,
     icon=[icon_file] if icon_file else None,
 )
+
+# On macOS, also build a .app bundle so that CI
+# and distribution scripts can find dist/PharmaSpot.app.
+if sys.platform == 'darwin':
+    app = BUNDLE(
+        exe,
+        name='PharmaSpot.app',
+        icon=icon_file if icon_file else None,
+        bundle_identifier='com.pharmaspot.PharmaSpot',
+    )

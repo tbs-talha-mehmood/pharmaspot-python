@@ -34,6 +34,10 @@ class POSView(QtWidgets.QWidget):
         self._can_edit_invoice = False
         self._can_delete_payment = False
         self._suppress_stock_warnings = False
+        # When True we are bulk-loading many lines into the cart and
+        # should avoid per-row UI work (focus, totals, repaints).
+        self._bulk_loading_cart = False
+        self._bulk_loading_cart = False
         self.products_cache = []
         self.held_sales: list[dict] = []
         self._load_held_sales()
@@ -43,7 +47,11 @@ class POSView(QtWidgets.QWidget):
         self._edit_existing_paid = 0.0
         self._build()
         self._load_customers()
-        self._load_products_cache()
+        # Reuse existing products cache where possible; avoid a full
+        # products reload on every reopen because that can be slow for
+        # large catalogs.
+        if not self.products_cache:
+            self._load_products_cache()
         self._load_settings()
 
     # ---------- UI ----------
@@ -194,7 +202,9 @@ class POSView(QtWidgets.QWidget):
         self.discount.setDecimals(2)
         self.discount.setSingleStep(1.0)
         self.discount.setMinimumWidth(110)
-        self.discount.valueChanged.connect(self._recalc_totals)
+        # Changing global discount affects every line's margin, so recalc
+        # totals and then refresh margin colors across all rows.
+        self.discount.valueChanged.connect(self._on_global_discount_changed)
         self.discount.installEventFilter(self)
         try:
             discount_le = self.discount.lineEdit()
@@ -1563,8 +1573,11 @@ class POSView(QtWidgets.QWidget):
             self.discount.setValue(0.0)
 
         skipped = []
-        # Suppress stock warnings while we reconstruct an existing invoice.
+        # Suppress stock warnings and expensive per-row totals while we
+        # reconstruct an existing invoice.
         self._suppress_stock_warnings = True
+        self._bulk_loading_cart = True
+        self.table.setUpdatesEnabled(False)
         try:
             for it in items:
                 pid = int(it["id"])
@@ -1616,9 +1629,14 @@ class POSView(QtWidgets.QWidget):
                     pass
                 self._recalc_row(row)
         finally:
+            # Re-enable normal behaviour before running a single totals /
+            # margin pass for the fully-loaded cart.
+            self._bulk_loading_cart = False
             self._suppress_stock_warnings = False
+            self.table.setUpdatesEnabled(True)
 
         self._recalc_totals()
+        self._refresh_margins_all_rows()
         if self.table.rowCount() <= 0:
             self._exit_invoice_edit_mode()
             QtWidgets.QMessageBox.information(self, "Invoice", "Could not load invoice into cart.")
@@ -1889,9 +1907,11 @@ class POSView(QtWidgets.QWidget):
                 if le is not None:
                     le.installEventFilter(self)
         # Allow keyboard focus without mouse
-        self._focus_cart_cell(row, 2)
+        if not self._bulk_loading_cart:
+            self._focus_cart_cell(row, 2)
         self._recalc_row(row)
-        self._recalc_totals()
+        if not self._bulk_loading_cart:
+            self._recalc_totals()
         return row
 
     def _remove_row(self, row: int):
@@ -1952,11 +1972,17 @@ class POSView(QtWidgets.QWidget):
             final = trade * (1.0 - (extra / 100.0))
             self.table.item(r, 3).setText(f"{trade:.2f}")
             self.table.item(r, 6).setText(f"{final * qty:.2f}")
+        except Exception:
+            pass
+        else:
+            # When bulk loading an existing invoice, skip expensive margin
+            # previews and a full totals recompute on every row. These will be
+            # done once after the bulk load completes.
+            if self._bulk_loading_cart:
+                return
             self._update_row_margin_tag(r)
             # Refresh totals when any row value changes
             self._recalc_totals()
-        except Exception:
-            pass
 
     def _on_row_value_changed(self, r: int):
         # Warn once when user moves this line into negative stock range.
@@ -2472,6 +2498,11 @@ class POSView(QtWidgets.QWidget):
             dlg.close()
             QtWidgets.QApplication.processEvents()
 
+    def _on_global_discount_changed(self, *_args):
+        """Handle changes to the global invoice discount."""
+        self._recalc_totals()
+        self._refresh_margins_all_rows()
+
     def _recalc_totals(self):
         # Number of distinct product lines in cart (not sum of quantities)
         total_items = 0
@@ -2510,6 +2541,13 @@ class POSView(QtWidgets.QWidget):
         self.paid_prior_value_label.setText(f"{existing_paid:.2f}")
         self.paid_total_value_label.setText(f"{paid_amount:.2f}")
         self.due_label.setText(f"{due_amount:.2f}")
+
+    def _refresh_margins_all_rows(self):
+        """Re-apply margin-based tinting for every cart row."""
+        # Skip while we are in the middle of a bulk cart reconstruction;
+        # margins will be applied once the cart is fully loaded.
+        if self._bulk_loading_cart:
+            return
         for r in range(self.table.rowCount()):
             self._update_row_margin_tag(r)
 
@@ -2705,6 +2743,8 @@ class POSView(QtWidgets.QWidget):
                 # Lookup row to read final unit price
                 name = str(pid)
                 final_price = 0.0
+                trade_price = 0.0
+                discount_pct = 0.0
                 qty = int(it.get("quantity", 0) or 0)
                 for r in range(self.table.rowCount()):
                     meta = self.table.item(r, 0).data(QtCore.Qt.UserRole) or {}
@@ -2714,6 +2754,11 @@ class POSView(QtWidgets.QWidget):
                         pct = float(self.table.cellWidget(r, 2).value())
                         extra = float(self.table.cellWidget(r, 4).value())
                         trade = retail * (1.0 - (pct / 100.0))
+                        trade_price = trade
+                        # For the invoice, treat the shown discount %
+                        # as the additional percentage applied on the
+                        # trade price.
+                        discount_pct = extra
                         final_price = trade * (1.0 - (extra / 100.0))
                         break
                 line_total = final_price * qty
@@ -2721,6 +2766,8 @@ class POSView(QtWidgets.QWidget):
                     {
                         "name": str(name),
                         "qty": qty,
+                        "trade_price": trade_price,
+                        "discount_pct": discount_pct,
                         "unit_price": final_price,
                         "line_total": line_total,
                     }
@@ -2728,7 +2775,17 @@ class POSView(QtWidgets.QWidget):
             except Exception:
                 pass
         if not rows:
-            rows.append({"name": "No items", "qty": 0, "unit_price": 0.0, "line_total": 0.0, "empty": True})
+            rows.append(
+                {
+                    "name": "No items",
+                    "qty": 0,
+                    "trade_price": 0.0,
+                    "discount_pct": 0.0,
+                    "unit_price": 0.0,
+                    "line_total": 0.0,
+                    "empty": True,
+                }
+            )
 
         now = QtCore.QDateTime.currentDateTime().toString("dd-MM-yyyy hh:mm:ss")
         invoice_ref = f"INV-{int(invoice_number):05d}" if invoice_number else "DRAFT"
@@ -2852,65 +2909,119 @@ class POSView(QtWidgets.QWidget):
             y += 10
 
             # Items table
-            item_w = int(inner_w * 0.56)
-            qty_w = int(inner_w * 0.10)
-            unit_w = int(inner_w * 0.17)
-            line_w = inner_w - item_w - qty_w - unit_w
-            row_x = [left, left + item_w, left + item_w + qty_w, left + item_w + qty_w + unit_w, right]
+            # Columns: Qty | Item | Trade | Disc % | Line Total
+            qty_w = int(inner_w * 0.08)
+            item_w = int(inner_w * 0.44)
+            trade_w = int(inner_w * 0.16)
+            disc_w = int(inner_w * 0.10)
+            line_w = inner_w - qty_w - item_w - trade_w - disc_w
+            if line_w < int(inner_w * 0.12):
+                # Guard against rounding issues on very small widths.
+                line_w = int(inner_w * 0.12)
+            row_x = [
+                left,  # qty
+                left + qty_w,  # item
+                left + qty_w + item_w,  # trade
+                left + qty_w + item_w + trade_w,  # disc
+                left + qty_w + item_w + trade_w + disc_w,  # line total
+                right,
+            ]
 
-            painter.setPen(QtCore.Qt.NoPen)
-            painter.setBrush(QtGui.QColor("#F3F4F6"))
-            painter.drawRect(left, y, inner_w, 30)
-            painter.setBrush(QtCore.Qt.NoBrush)
-            painter.setPen(line_pen)
-            painter.drawRect(left, y, inner_w, 30)
-            painter.setPen(main_text)
-            painter.setFont(font(10, True))
-            painter.drawText(QtCore.QRect(row_x[0] + 6, y, item_w - 12, 30), QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter, "ITEM")
-            painter.drawText(QtCore.QRect(row_x[1] + 4, y, qty_w - 8, 30), QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter, "QTY")
-            painter.drawText(QtCore.QRect(row_x[2] + 4, y, unit_w - 8, 30), QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter, "UNIT PRICE")
-            painter.drawText(QtCore.QRect(row_x[3] + 4, y, line_w - 8, 30), QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter, "LINE TOTAL")
-            y += 30
+            def _draw_items_header():
+                nonlocal y
+                painter.setPen(QtCore.Qt.NoPen)
+                painter.setBrush(QtGui.QColor("#F3F4F6"))
+                painter.drawRect(left, y, inner_w, 30)
+                painter.setBrush(QtCore.Qt.NoBrush)
+                painter.setPen(line_pen)
+                painter.drawRect(left, y, inner_w, 30)
+                painter.setPen(main_text)
+                painter.setFont(font(10, True))
+                painter.drawText(
+                    QtCore.QRect(row_x[0] + 4, y, qty_w - 8, 30),
+                    QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter,
+                    "QTY",
+                )
+                painter.drawText(
+                    QtCore.QRect(row_x[1] + 6, y, item_w - 12, 30),
+                    QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter,
+                    "ITEM",
+                )
+                painter.drawText(
+                    QtCore.QRect(row_x[2] + 4, y, trade_w - 8, 30),
+                    QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter,
+                    "TRADE",
+                )
+                painter.drawText(
+                    QtCore.QRect(row_x[3] + 4, y, disc_w - 8, 30),
+                    QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter,
+                    "DISC %",
+                )
+                painter.drawText(
+                    QtCore.QRect(row_x[4] + 4, y, line_w - 8, 30),
+                    QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter,
+                    "LINE TOTAL",
+                )
+                y += 30
 
+            # Render all rows, moving to a new page when needed.
+            _draw_items_header()
             painter.setFont(font(11))
-            for row in rows:
+            row_index = 0
+            while row_index < len(rows):
+                row = rows[row_index]
                 if row.get("empty"):
                     row_h = 30
                 else:
                     row_h = max(32, wrapped_height(painter.font(), str(row.get("name", "")), item_w - 12) + 10)
 
-                if y + row_h > bottom - 220:
-                    break
+                # If no room left on this page, start new page and redraw header.
+                if y + row_h > bottom - 140:
+                    printer.newPage()
+                    # Reset vertical position for new page and draw only the table header.
+                    y = y0 + inner_pad
+                    painter.setPen(line_pen)
+                    painter.drawLine(left, y, right, y)
+                    y += 10
+                    _draw_items_header()
+                    continue
 
                 painter.setPen(line_pen)
                 painter.drawLine(left, y + row_h, right, y + row_h)
                 painter.setPen(main_text)
+                if not row.get("empty"):
+                    painter.drawText(
+                        QtCore.QRect(row_x[0] + 4, y, qty_w - 8, row_h),
+                        QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter,
+                        str(int(row.get("qty", 0) or 0)),
+                    )
                 painter.drawText(
-                    QtCore.QRect(row_x[0] + 6, y + 4, item_w - 12, row_h - 8),
+                    QtCore.QRect(row_x[1] + 6, y + 4, item_w - 12, row_h - 8),
                     QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter | QtCore.Qt.TextWordWrap,
                     str(row.get("name", "")),
                 )
                 if not row.get("empty"):
                     painter.drawText(
-                        QtCore.QRect(row_x[1] + 4, y, qty_w - 8, row_h),
+                        QtCore.QRect(row_x[2] + 4, y, trade_w - 8, row_h),
                         QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter,
-                        str(int(row.get("qty", 0) or 0)),
+                        f"{float(row.get('trade_price', 0.0) or 0.0):.2f}",
                     )
                     painter.drawText(
-                        QtCore.QRect(row_x[2] + 4, y, unit_w - 8, row_h),
+                        QtCore.QRect(row_x[3] + 4, y, disc_w - 8, row_h),
                         QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter,
-                        f"{float(row.get('unit_price', 0.0) or 0.0):.2f}",
+                        f"{float(row.get('discount_pct', 0.0) or 0.0):.2f}",
                     )
                     painter.setFont(font(11, True))
                     painter.drawText(
-                        QtCore.QRect(row_x[3] + 4, y, line_w - 8, row_h),
+                        QtCore.QRect(row_x[4] + 4, y, line_w - 8, row_h),
                         QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter,
                         f"{float(row.get('line_total', 0.0) or 0.0):.2f}",
                     )
                     painter.setFont(font(11))
                 y += row_h
+                row_index += 1
 
-            # Summary
+            # Summary – start immediately after the products block.
             y += 12
             sum_w = int(inner_w * 0.42)
             sum_x = right - sum_w
@@ -2952,7 +3063,17 @@ class POSView(QtWidgets.QWidget):
             y += badge_h + 18
 
             # Footer
+            # Keep a small gap below the Amount Due badge, but also make
+            # sure the footer text never goes past the printable bottom.
+            footer_block_h = 40  # approx line + text
+            # Ideal footer line position based on existing content.
+            ideal_y = y + 8
+            # Maximum allowed so that text (about 32‑36px tall) stays
+            # within the printable area.
+            max_y = bottom - footer_block_h
+            y = min(ideal_y, max_y)
             painter.setPen(QtGui.QPen(QtGui.QColor("#CBD5E1"), 1, QtCore.Qt.DashLine))
+            # Footer separator spans full width at the bottom.
             painter.drawLine(left, y, right, y)
             painter.setPen(soft_text)
             painter.setFont(font(10))
