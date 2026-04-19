@@ -54,12 +54,10 @@ pip install pyinstaller
 # Clean previous builds
 rm -rf build dist
 
-# Use mac-specific spec that handles paths and icons; flags like
-# --windowed/--console must be set inside the .spec, so we only pass
-# generic options here.
-# Build a universal2 binary so the resulting .app
-# runs on both Intel and Apple Silicon Macs.
-pyinstaller --target-arch universal2 PharmaSpot.macos.spec --noconfirm --clean
+# Use mac-specific spec that handles paths, icons, and target arch;
+# flags like --windowed/--console must be set inside the .spec, so we
+# only pass generic options here.
+pyinstaller PharmaSpot.macos.spec --noconfirm --clean
 
 APP="dist/PharmaSpot.app"
 if [[ -d "$APP" ]]; then

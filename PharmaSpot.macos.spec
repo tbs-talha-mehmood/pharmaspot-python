@@ -68,7 +68,9 @@ exe = EXE(
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=(sys.platform == 'darwin'),
-    target_arch=None,
+    # Build a universal2 binary on macOS so the .app
+    # runs on both Intel and Apple Silicon Macs.
+    target_arch='universal2' if sys.platform == 'darwin' else None,
     codesign_identity=None,
     entitlements_file=None,
     icon=[icon_file] if icon_file else None,
