@@ -57,7 +57,9 @@ rm -rf build dist
 # Use mac-specific spec that handles paths and icons; flags like
 # --windowed/--console must be set inside the .spec, so we only pass
 # generic options here.
-pyinstaller PharmaSpot.macos.spec --noconfirm --clean
+# Build a universal2 binary so the resulting .app
+# runs on both Intel and Apple Silicon Macs.
+pyinstaller --target-arch universal2 PharmaSpot.macos.spec --noconfirm --clean
 
 APP="dist/PharmaSpot.app"
 if [[ -d "$APP" ]]; then
