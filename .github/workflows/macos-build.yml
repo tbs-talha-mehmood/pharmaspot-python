@@ -43,14 +43,16 @@ jobs:
         run: ./scripts/build_macos.sh
 
       - name: Upload .app bundle
-        if: exists('dist/PharmaSpot.app')
+        # hashFiles() returns a non-empty string if the file exists.
+        if: ${{ hashFiles('dist/PharmaSpot.app') != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: PharmaSpot-macOS-app
           path: dist/PharmaSpot.app
 
       - name: Upload DMG (if present)
-        if: exists('dist/PharmaSpot-macOS.dmg')
+        # Only upload DMG when it was actually created.
+        if: ${{ hashFiles('dist/PharmaSpot-macOS.dmg') != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: PharmaSpot-macOS-dmg
