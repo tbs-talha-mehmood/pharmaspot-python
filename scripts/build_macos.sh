@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 set -euo pipefail
 
 # Build PharmaSpot for macOS using PyInstaller
@@ -22,8 +22,8 @@ if [[ ! -f "$ICNS" && -f "$PNG" && "$OSTYPE" == darwin* ]]; then
   rm -rf "$TMPSET"
   mkdir -p "$TMPSET"
   for sz in 16 32 64 128 256 512; do
-    sips -z $sz $sz     "$PNG" --out "$TMPSET/icon_${sz}x${sz}.png" >/dev/null
-    sips -z $((sz*2)) $((sz*2)) "$PNG" --out "$TMPSET/icon_${sz}x${sz}@2x.png" >/dev/null
+    sips -z "$sz" "$sz" "$PNG" --out "$TMPSET/icon_${sz}x${sz}.png" >/dev/null
+    sips -z "$((sz * 2))" "$((sz * 2))" "$PNG" --out "$TMPSET/icon_${sz}x${sz}@2x.png" >/dev/null
   done
   iconutil -c icns -o "$ICNS" "$TMPSET"
   rm -rf "$TMPSET"
@@ -37,8 +37,19 @@ fi
 source "$VENV/bin/activate"
 
 python -m pip install --upgrade pip wheel setuptools
+
 # Install client + backend deps, then PyInstaller
-pip install -r py_client/requirements.txt\n# Try backend deps; if bcrypt 3.2.2 fails to build on macOS, retry without it and install a newer wheel\nif ! pip install -r python_backend/requirements.txt; then\n  echo 'Falling back: installing backend deps without bcrypt, then bcrypt>=4'\n  grep -v '^bcrypt' python_backend/requirements.txt > /tmp/backend-reqs-no-bcrypt.txt\n  pip install -r /tmp/backend-reqs-no-bcrypt.txt\n  pip install 'bcrypt>=4.0.1,<5'\nfi\npip install pyinstaller
+pip install -r py_client/requirements.txt
+
+# Try backend deps; if bcrypt fails to build, retry without it and then add a newer wheel.
+if ! pip install -r python_backend/requirements.txt; then
+  echo 'Falling back: installing backend deps without bcrypt, then bcrypt>=4'
+  grep -v '^bcrypt' python_backend/requirements.txt > /tmp/backend-reqs-no-bcrypt.txt
+  pip install -r /tmp/backend-reqs-no-bcrypt.txt
+  pip install 'bcrypt>=4.0.1,<5'
+fi
+
+pip install pyinstaller
 
 # Clean previous builds
 rm -rf build dist
