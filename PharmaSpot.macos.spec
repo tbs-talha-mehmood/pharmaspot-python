@@ -4,8 +4,10 @@ import sys
 from pathlib import Path
 from PyInstaller.utils.hooks import collect_submodules
 
-# Resolve cross-platform paths
-ROOT = Path(__file__).resolve().parent
+# Resolve cross-platform paths; when PyInstaller executes this spec,
+# __file__ is not defined, so we base paths on the current working
+# directory (the project root).
+ROOT = Path(os.getcwd()).resolve()
 ENTRY_SCRIPT = str(ROOT / 'py_client' / 'main.py')
 ASSETS_DIR = str(ROOT / 'py_client' / 'assets')
 ENV_FILE = str(ROOT / 'python_backend' / '.env')
